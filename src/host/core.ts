@@ -10,6 +10,7 @@ import { snapshotFingerprint } from './snapshot-fingerprint.js'
 import { isSafeBranchName, isSafePath, isSafeRemoteName } from './validate.js'
 import { isOutwardSelector, repoDirCertified, repoDirExternal, repoDirFor, scanRepos, samePath, REPO_RESULT_LIMIT } from './repos.js'
 import { scanCodeWorkspace } from './code-workspace.js'
+import { scanMultiRootRoots } from './multi-root.js'
 import type { CodeWorkspaceCacheEntry, CodeWorkspaceScan } from './code-workspace.js'
 import { parseWorktreePorcelain, worktreeCheckouts } from './worktrees.js'
 import type { WorktreeCheckout, WorktreeInfo } from './worktrees.js'
@@ -417,6 +418,17 @@ async function gitToplevel(deps: SnapshotDeps, dir: string): Promise<string | nu
 }
 
 /** External repository roots the session's `.code-workspace` file certifies. */
+/** Registry roots the multi-root workspace plugin has registered for this
+ * session's workspace. Fork-local: upstream ships only the `.code-workspace`
+ * source (ADR-0030); this second source keeps the panel aligned with the
+ * Folders panel the agent already uses. */
+export async function sessionRegistryRoots(
+  deps: SnapshotDeps,
+  cwd: string,
+): Promise<{ roots: readonly { path: string; root: string; name: string; label?: string }[] }> {
+  return scanMultiRootRoots(deps.fs, (dir) => gitToplevel(deps, dir), cwd)
+}
+
 export async function sessionExternalRoots(
   deps: SnapshotDeps,
   cwd: string,
@@ -505,8 +517,11 @@ export async function resolveWorkspace(
     const nested = await repoDirFor(deps.fs, cwd, rel)
     if (nested.ok) start = nested.dir
     else {
-      const external = await sessionExternalRoots(deps, cwd, codeWorkspace)
-      const admitted = await repoDirExternal(deps.fs, cwd, rel, external.roots.map((root) => root.root))
+      const workspaceRoots = codeWorkspace !== 'off'
+        ? (await sessionExternalRoots(deps, cwd, codeWorkspace)).roots.map((root) => root.root)
+        : []
+      const registryRoots = (await sessionRegistryRoots(deps, cwd)).roots.map((root) => root.root)
+      const admitted = await repoDirExternal(deps.fs, cwd, rel, [...workspaceRoots, ...registryRoots])
       if (admitted.ok) start = admitted.dir
       else {
         const certified = await repoDirCertified(deps.fs, cwd, rel, await certifiedRepoRoot(deps, cwd))
@@ -704,6 +719,23 @@ export async function listSessionRepos(
         ...(external.file !== null ? { file: external.file } : {}),
       }
     }
+  }
+  // Fork-local second source: additional roots registered by the multi-root
+  // workspace plugin. They sit outside the cwd like `.code-workspace` folders,
+  // so neither probe above can see them; each entry already survived the same
+  // realpath + `git rev-parse --show-toplevel` certification.
+  const registry = await sessionRegistryRoots(deps, cwd)
+  for (const root of registry.roots) {
+    if (repos.length >= resultLimit + registry.roots.length) break
+    if (repos.some((entry) => samePath(entry.root, root.root))) continue
+    repos.push({
+      path: root.path,
+      root: root.root,
+      name: root.name,
+      kind: 'external',
+      role: 'repo',
+      ...(root.label !== undefined ? { label: root.label } : {}),
+    })
   }
   return { ok: true, value: { cwd, repos, ...(recognition !== undefined ? { codeWorkspace: recognition } : {}) } }
 }

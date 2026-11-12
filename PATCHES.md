@@ -10,8 +10,18 @@
   配置 `codeWorkspace`（`off` | `auto` | 文件名），从会话 cwd 里的 `.code-workspace`
   读取 `folders[].path`，每个目录要 realpath + `.git` + `rev-parse --show-toplevel`
   等于自身才认证。工作区外的仓库也能切换，文件浏览跟随所选根。
-- **本仓库目前没有本地代码改动**。此前在已安装的 1.13.2 上打过运行时补丁
-  （让面板读取 multi-root 注册表），若改用 1.14.0 的 `codeWorkspace`，该补丁可废弃。
+- 本地已实现**路线 B**：Git 面板直接读取 multi-root 插件的注册表，
+  作为与 `codeWorkspace` 并列的第二个外部根来源。
+
+## 本地改动（路线 B）
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/host/multi-root.ts` | 新增：读 `$DSH_HOME/storages/multi_root_workspace.json`，按会话 workspace 根（含子目录）取 `roots[]`；跳过 `access: 'read-only'`、cwd 内目录、非仓库；每个根仍需 `git rev-parse --show-toplevel` 等于自身 |
+| `src/host/core.ts` | 新增 `sessionRegistryRoots`；`resolveWorkspace` 把注册表根与 `.code-workspace` 根一起交给 `repoDirExternal` 认证；`listSessionRepos` 追加 `kind: 'external'` 行（`aliasId` 作为显示名） |
+| `test/unit/multi-root.test.mjs` | 6 个用例：注册表缺失/损坏、精确与祖先键匹配、只读与 cwd 内过滤、别名标签、`listSessionRepos` 列表与 `resolveWorkspace` 放行/拒绝 |
+
+未注册的同级仓库仍然无法被选择（测试里用 `../service-a` 断言拒绝），路径规则没有放松。
 
 ## 两条可选路线
 
