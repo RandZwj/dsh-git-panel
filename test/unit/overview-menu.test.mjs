@@ -30,6 +30,10 @@ function commands(log) {
     openReset: (value) => log.push(['reset', value.hash]),
     openCheckout: (value) => log.push(['checkout', value.hash]),
     quote: (text) => log.push(['quote', text]),
+    syncUpstream: () => log.push(['sync']),
+    pullUpstream: () => log.push(['pull']),
+    pushUpstream: () => log.push(['push']),
+    pushBranch: (value) => { log.push(['pushBranch', value.name]) },
   }
 }
 
@@ -284,4 +288,42 @@ test('create-branch and cherry-pick are gated on capabilities and a current bran
   const detached = commitMenuActions(commit, env(), commands([]), { busy: false, branchCreate: true, cherryPick: true, currentBranch: null })
   assert.ok(detached.some((a) => a.id === 'create-branch'))
   assert.ok(!detached.some((a) => a.id === 'cherry-pick'))
+})
+
+test('the current branch row offers sync, update and push in exactly their states', () => {
+  const current = { ...branch, isCurrent: true, ahead: 2, behind: 3 }
+  const log = []
+  const syncing = branchMenuActions(current, env(), commands(log), { busy: false, hasUpstream: true, syncReady: true })
+  assert.ok(syncing.some((a) => a.id === 'sync-branch'))
+  // Diverged: neither the fast-forward update nor the plain push is offered.
+  assert.ok(!syncing.some((a) => a.id === 'update-branch'))
+  assert.ok(!syncing.some((a) => a.id === 'push-current'))
+  void syncing.find((a) => a.id === 'sync-branch').run()
+
+  const behindOnly = branchMenuActions({ ...current, ahead: 0, behind: 3 }, env(), commands(log), { busy: false, hasUpstream: true })
+  const syncIds = (actions) => actions.map((a) => a.id).filter((id) => ['sync-branch', 'update-branch', 'push-current'].includes(id))
+  assert.deepEqual(syncIds(behindOnly), ['update-branch'])
+  void behindOnly.find((a) => a.id === 'update-branch').run()
+
+  const aheadOnly = branchMenuActions({ ...current, ahead: 2, behind: 0 }, env(), commands(log), { busy: false, hasUpstream: true })
+  assert.deepEqual(syncIds(aheadOnly), ['push-current'])
+  void aheadOnly.find((a) => a.id === 'push-current').run()
+
+  assert.deepEqual(log, [['sync'], ['pull'], ['push']])
+})
+
+test('another branch offers its own push only when strictly ahead and the host can do it', () => {
+  const log = []
+  const ahead = { ...branch, name: 'feature/x', ahead: 1, behind: 0 }
+  const offered = branchMenuActions(ahead, env(), commands(log), { busy: false, branchPush: true })
+  const push = offered.find((a) => a.id === 'push-branch')
+  assert.ok(push !== undefined, 'a strictly-ahead branch can be pushed by name')
+  void push.run()
+  assert.deepEqual(log, [['pushBranch', 'feature/x']])
+
+  // Diverged, or a host without the action: no entry rather than one that fails.
+  assert.equal(branchMenuActions({ ...ahead, behind: 2 }, env(), commands([]), { busy: false, branchPush: true }).some((a) => a.id === 'push-branch'), false)
+  assert.equal(branchMenuActions(ahead, env(), commands([]), { busy: false }).some((a) => a.id === 'push-branch'), false)
+  // A remote row pushes through its tracking ref, not through this entry.
+  assert.equal(branchMenuActions({ ...ahead, isRemote: true }, env(), commands([]), { busy: false, branchPush: true }).some((a) => a.id === 'push-branch'), false)
 })

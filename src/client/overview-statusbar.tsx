@@ -9,7 +9,7 @@ import type { GitSnapshot } from './types.js'
 import type { GitKey } from './locales.js'
 import { DownloadIcon, GitHubIcon, LinkIcon, SyncIcon, UploadIcon } from './icons.js'
 import { TipWrapper, useHoverTip } from './tip.js'
-import { pushIntent as pushIntentOf } from './push-policy.js'
+import { canSync as canSyncOf, pushIntent as pushIntentOf } from './push-policy.js'
 
 type Translate = (key: GitKey, params?: Record<string, string | number>) => string
 
@@ -20,10 +20,15 @@ export interface StatusBarCbs {
   readonly pushBusy: boolean
   readonly publishBusy: boolean
   readonly setUpstreamBusy: boolean
+  /** The merge-based sync (merge the upstream, then push) is running. */
+  readonly syncRunBusy: boolean
   readonly switchBusy: boolean
   readonly onCheck: () => void
   readonly onPull: () => void
   readonly onPush: () => void
+  /** Open the sync confirmation (or run it straight away when the reader
+   * asked not to be asked again). */
+  readonly onSync: () => void
   readonly onPublish: () => void
   readonly onSetUpstream: () => void
   readonly t: Translate
@@ -98,12 +103,14 @@ function StatusBar({ snapshot, cb }: { snapshot: GitSnapshot; cb: StatusBarCbs }
     else if (ahead > 0 && behind > 0) { text = t('status.diverged', { ahead, behind }); tone = ' gp-statusbar__state--warn' }
     else if (behind > 0) { text = t('status.behind', { n: behind }); tone = ' gp-statusbar__state--warn' }
     else { text = t('status.ahead', { n: ahead }) }
-    if (cb.switchBusy || cb.pullBusy || cb.pushBusy || cb.setUpstreamBusy) {
+    if (cb.switchBusy || cb.pullBusy || cb.pushBusy || cb.setUpstreamBusy || cb.syncRunBusy) {
       const text = cb.switchBusy
         ? t('status.switching')
         : cb.pullBusy
           ? t('status.pulling')
-          : cb.setUpstreamBusy ? t('status.settingUpstream') : t('status.pushing')
+          : cb.syncRunBusy
+            ? t('status.syncing')
+            : cb.setUpstreamBusy ? t('status.settingUpstream') : t('status.pushing')
       // The whole bar already marks the busy window with `aria-busy`, and the
       // check button spins for exactly as long (`.gp-statusbar--busy`): a second
       // loader next to the label would say the same thing twice, one of them
@@ -129,6 +136,16 @@ function StatusBar({ snapshot, cb }: { snapshot: GitSnapshot; cb: StatusBarCbs }
       disabled: cb.syncBusy, 'aria-label': t('status.check'),
       onClick: () => { hideTip(); cb.onCheck() },
     }, h(SyncIcon, { size: 13 }))) : null,
+    // Diverged with an upstream on a remote: one confirmed merge, then the
+    // ordinary push (never a pull, never a force). Sits before the single-
+    // intent controls because those two are absent in exactly this state.
+    canSyncOf(snapshot) ? h(TipWrapper, {
+      key: 'sync', tipProps: tipProps(t('status.syncTitle')),
+    }, h('button', {
+      type: 'button', className: 'gp-btn gp-btn--sm gp-statusbar__pull',
+      disabled: cb.syncRunBusy, 'aria-label': t('status.sync'),
+      onClick: () => { hideTip(); cb.onSync() },
+    }, [h(SyncIcon, { key: 'i', size: 12 }), t('status.sync')])) : null,
     canPull ? h(TipWrapper, {
       key: 'pull', tipProps: tipProps(t('status.pullTitle')),
     }, h('button', {
@@ -163,7 +180,7 @@ function StatusBar({ snapshot, cb }: { snapshot: GitSnapshot; cb: StatusBarCbs }
   // The publish modal and the set-upstream chooser own their own in-flight
   // locks; their busy callbacks still drive the bar's busy state and label
   // while the write runs behind the overlay.
-  const barBusy = cb.syncBusy || cb.pullBusy || cb.pushBusy || cb.setUpstreamBusy || cb.switchBusy
+  const barBusy = cb.syncBusy || cb.pullBusy || cb.pushBusy || cb.setUpstreamBusy || cb.syncRunBusy || cb.switchBusy
   return h('div', { key: 'statusbar', className: `gp-statusbar${barBusy ? ' gp-statusbar--busy' : ''}`, 'aria-busy': barBusy }, [
     repoNode,
     h('div', { key: 'sync', className: 'gp-statusbar__sync' }, [stateNode, ...actions]),

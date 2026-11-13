@@ -337,3 +337,9 @@ test('a merge target that resolves nowhere is a not-found, not a raw git error (
   // `git merge` prints this one to stdout (exit 1), unlike most ref misses.
   assert.equal(classifyActionFailure('merge: refs/heads/nope - not something we can merge', '', 1).code, 'not-found')
 })
+
+test('a branch-row push is resolved against the repository, never planned from the wire', () => {
+  const plan = planAction({ kind: 'push-branch', name: 'feature/x' }, false)
+  assert.equal(plan.error, 'invalid-name', 'the remote comes from the branch tracking config')
+  assert.match(plan.message, /resolved before planning/)
+})

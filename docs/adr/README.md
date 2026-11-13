@@ -46,6 +46,8 @@
 | [ADR-0028](0028-context-menu-ownership.md) | 右键菜单：自有目标族、平台动作借用、面板实例归属 | UI |
 | [ADR-0029](0029-unique-service-key-and-idempotent-mount.md) | 服务键与 RPC / locale 命名空间唯一化，重复挂载保持惰性 | 架构 |
 | [ADR-0030](0030-external-roots-from-code-workspace.md) | 由 `.code-workspace` 文件认证工作区外的仓库根 | 安全 |
+| [ADR-0031](0031-diverged-sync-merge-then-push.md) | 分叉分支的同步：显式合并上游后普通推送 | 安全 |
+| [ADR-0032](0032-branch-row-push.md) | 分支行的推送按分支解析，不检出也能推 | 安全 |
 
 ## 有效期
 

@@ -47,6 +47,23 @@ export function canPublish(snapshot: GitSnapshot): boolean {
     && snapshot.remote !== null
 }
 
+/**
+ * Offer the merge-based sync: the branch diverged from its upstream (both
+ * ahead and behind), the upstream is on a configured remote, and this host can
+ * run the confirmed merge.
+ *
+ * The sync writes exactly what the panel already owns — a confirmed
+ * `branch-merge` of the upstream ref, then the ordinary `push` — so it never
+ * becomes a `git pull`, never rebases, and never forces: after the merge the
+ * branch is strictly ahead again and the push is a fast-forward.
+ */
+export function canSync(snapshot: GitSnapshot): boolean {
+  return snapshot.hasUpstream === true
+    && snapshot.ahead > 0 && snapshot.behind > 0
+    && snapshot.upstream !== undefined
+    && snapshot.capabilities?.branchMerge === true
+}
+
 /** The remote write the sync controls offer for this snapshot; null = none. */
 export type PushIntent = 'push' | 'set-upstream' | 'publish'
 

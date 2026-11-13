@@ -12,7 +12,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canPush, canSetUpstream, canPublish, pushIntent, upstreamCandidates } from '../../lib/testkit.mjs'
+import { canPush, canSetUpstream, canPublish, canSync, pushIntent, upstreamCandidates } from '../../lib/testkit.mjs'
 
 const REMOTE = { name: 'origin', url: 'git@github.com:owner/repo.git', webUrl: 'https://github.com/owner/repo', host: 'github.com', hostKind: 'github' }
 
@@ -118,6 +118,27 @@ test('an existing upstream is never attached or published, only pushed when stri
   assert.equal(pushIntent(snap({ ...upstream, ahead: 2, behind: 3 })), null)
   // Strictly behind: pull territory, never an upload.
   assert.equal(pushIntent(snap({ ...upstream, ahead: 0, behind: 4 })), null)
+})
+
+test('the merge-based sync is offered only for a diverged branch whose upstream is on a remote', () => {
+  const upstream = {
+    hasUpstream: true, ahead: 2, behind: 3,
+    upstream: { remote: 'origin', branch: 'main', ref: 'refs/remotes/origin/main' },
+    capabilities: { branchMerge: true },
+  }
+  // The one state it exists for: both directions, and every leg available.
+  assert.equal(canSync(snap(upstream)), true)
+  // Single-direction states keep their own controls; the hosts' ff-pull and
+  // plain push already handle them and the sync would add nothing.
+  assert.equal(canSync(snap({ ...upstream, ahead: 0 })), false, 'strictly behind is a fast-forward pull')
+  assert.equal(canSync(snap({ ...upstream, behind: 0 })), false, 'strictly ahead is a plain push')
+  // Older hosts: no upstream ref to merge (the snapshot predates the field),
+  // or no branch-merge action to run it with.
+  const { upstream: _ref, ...withoutRef } = upstream
+  assert.equal(canSync(snap(withoutRef)), false)
+  assert.equal(canSync(snap({ ...upstream, capabilities: {} })), false)
+  // No upstream at all is publish/set-upstream territory.
+  assert.equal(canSync(snap({ ...upstream, hasUpstream: false })), false)
 })
 
 test('push, set-upstream and publish can never overlap', () => {

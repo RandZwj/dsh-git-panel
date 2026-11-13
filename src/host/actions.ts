@@ -130,6 +130,10 @@ export function planAction(action: GitAction, unborn: boolean): PlanResult {
       // non-zero, work tree untouched) when the branches diverged, so there is
       // no merge/rebase or conflict path to handle here.
       return { argv: [['git', 'pull', '--ff-only']] }
+    case 'push-branch':
+      // Resolved in runAction: the branch's upstream remote comes from the
+      // repository's tracking config, never from the wire.
+      return { error: 'invalid-name', message: 'push-branch must be resolved before planning' }
     case 'push':
       // Plain `git push` (never --force): it pushes the current branch to its
       // configured upstream and the remote refuses a non-fast-forward, so a
@@ -575,6 +579,83 @@ async function runSetUpstream(
   return { ok: true, snapshot: snapshot.value, output: res.run.stdout.trim() }
 }
 
+/**
+ * Push one named local branch to its own upstream.
+ *
+ * The branch row offers this for a branch that is strictly ahead of its
+ * upstream; the host repeats every check rather than trusting the client: the
+ * branch must exist, its upstream must live on a configured remote, and the
+ * branch must still be strictly ahead (a diverged branch is refused, exactly
+ * like the current-branch push). The remote is resolved from the branch's own
+ * tracking config, never from the request, so a stale row cannot push somewhere
+ * else. Never a force.
+ */
+async function runPushBranch(
+  deps: SnapshotDeps,
+  config: GitPanelConfig,
+  request: GitActionRequest,
+  action: Extract<GitAction, { kind: 'push-branch' }>,
+  root: string,
+): Promise<GitActionResult> {
+  if (!isSafeBranchName(action.name)) {
+    return { ok: false, error: { code: 'invalid-name', message: `unsafe branch name: ${action.name}` } }
+  }
+  const full = `refs/heads/${action.name}`
+  const exists = await runCommand(deps.run, ['git', 'rev-parse', '--verify', '--quiet', '--end-of-options', full], root, 'push-branch-exists', deps.signal)
+  const existsBroke = probeFailure(exists)
+  if (existsBroke !== null) return existsBroke
+  if (!('run' in exists) || exists.run.exitCode !== 0) {
+    return { ok: false, error: { code: 'not-found', message: 'that local branch no longer exists' } }
+  }
+
+  // `%(upstream)` and `%(upstream:remotename)` in one local probe: the full
+  // tracking ref is what the divergence check reads, the remote name is what the
+  // push addresses. A local (`.`) upstream yields no remote name here.
+  const upstream = await runCommand(deps.run, ['git', 'for-each-ref', '--format=%(upstream)%00%(upstream:remotename)', full], root, 'push-branch-upstream', deps.signal)
+  if ('failure' in upstream) {
+    return { ok: false, error: { code: 'git-unavailable', message: upstream.failure instanceof Error ? upstream.failure.message : String(upstream.failure) } }
+  }
+  if (upstream.run.cancelled) return { ok: false, error: { code: 'cancelled' } }
+  if (upstream.run.timedOut) return { ok: false, error: { code: 'timeout' } }
+  if (upstream.run.exitCode !== 0) {
+    return { ok: false, error: { code: 'git-error', message: scrubCredentials(upstream.run.stderr.trim()) || 'git for-each-ref failed' } }
+  }
+  const [upstreamRef = '', upstreamRemote = ''] = upstream.run.stdout.trim().split('\u0000')
+  if (!upstreamRef.startsWith('refs/remotes/') || !isSafeRemoteName(upstreamRemote)) {
+    return { ok: false, error: { code: 'no-upstream', message: 'that branch has no upstream on a configured remote' } }
+  }
+
+  // Strict-ahead re-check: `--left-right <branch>...<upstream>` reports the
+  // branch's own side first.
+  const counts = await runCommand(deps.run, ['git', 'rev-list', '--count', '--left-right', `${full}...${upstreamRef}`], root, 'push-branch-counts', deps.signal)
+  if ('failure' in counts) {
+    return { ok: false, error: { code: 'git-unavailable', message: counts.failure instanceof Error ? counts.failure.message : String(counts.failure) } }
+  }
+  if (counts.run.cancelled) return { ok: false, error: { code: 'cancelled' } }
+  if (counts.run.timedOut) return { ok: false, error: { code: 'timeout' } }
+  if (counts.run.exitCode !== 0) {
+    return { ok: false, error: { code: 'git-error', message: scrubCredentials(counts.run.stderr.trim()) || 'git rev-list failed' } }
+  }
+  const [ahead = 0, behind = 0] = counts.run.stdout.trim().split(/\s+/).map((part) => Number(part) || 0)
+  if (ahead <= 0 || behind > 0) {
+    return { ok: false, error: { code: 'branch-not-ahead', message: 'that branch is not strictly ahead of its upstream' } }
+  }
+
+  const push = await runCommand(deps.run, ['git', 'push', upstreamRemote, action.name], root, 'push-branch', deps.signal)
+  if ('failure' in push) {
+    return { ok: false, error: { code: 'git-unavailable', message: push.failure instanceof Error ? push.failure.message : String(push.failure) } }
+  }
+  if (push.run.cancelled) return { ok: false, error: { code: 'cancelled' } }
+  if (push.run.timedOut) return { ok: false, error: { code: 'timeout' } }
+  if (push.run.exitCode !== 0) {
+    return { ok: false, error: classifyActionFailure(push.run.stdout, push.run.stderr, push.run.exitCode ?? -1) }
+  }
+
+  const snapshot = await snapshotForSession(deps, config, request.sessionId, { repo: request.repo })
+  if (!snapshot.ok) return { ok: false, error: { code: 'git-error', message: 'snapshot after action failed' } }
+  return { ok: true, snapshot: snapshot.value, output: push.run.stdout.trim() }
+}
+
 /** Execute a management action, returning the fresh snapshot on success. */
 export async function runAction(
   deps: SnapshotDeps,
@@ -610,6 +691,9 @@ export async function runAction(
 
   if (request.action.kind === 'set-upstream') {
     return runSetUpstream(deps, config, request, request.action, root, headProbe, unborn)
+  }
+  if (request.action.kind === 'push-branch') {
+    return runPushBranch(deps, config, request, request.action, root)
   }
 
   // Stash is a stack addressed by position; under a shared worktree another

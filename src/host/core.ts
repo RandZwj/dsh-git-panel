@@ -331,6 +331,35 @@ export function parseFetchRemotes(stdout: string): GitRemote[] {
 }
 
 /**
+ * Split `@{upstream}`'s full ref into its configured remote and branch.
+ *
+ * `refs/remotes/origin/main` is unambiguous only against the configured remote
+ * names: a remote may itself contain slashes, so the longest matching name
+ * wins. Anything else (no upstream, a local `.` upstream spelled under
+ * `refs/heads/`, a ref outside `refs/remotes/`) yields `undefined` — the sync
+ * flow then offers nothing rather than guessing a remote.
+ */
+export function parseUpstreamRef(
+  res: unknown,
+  remotes: readonly { readonly name: string }[],
+): { readonly remote: string; readonly branch: string; readonly ref: string } | undefined {
+  const outcome = res as { readonly run?: { readonly exitCode?: number | null; readonly stdout?: string } }
+  const run = outcome.run
+  if (run === undefined || run.exitCode !== 0 || run.stdout === undefined) return undefined
+  const ref = run.stdout.trim()
+  const prefix = 'refs/remotes/'
+  if (!ref.startsWith(prefix)) return undefined
+  const rest = ref.slice(prefix.length)
+  const remote = remotes
+    .map((r) => r.name)
+    .filter((name) => rest.startsWith(`${name}/`))
+    .sort((a, b) => b.length - a.length)[0]
+  if (remote === undefined) return undefined
+  const branch = rest.slice(remote.length + 1)
+  return branch === '' ? undefined : { remote, branch, ref }
+}
+
+/**
  * Pick the primary remote from `git remote -v` output and parse its fetch URL.
  * Prefers `origin`; otherwise the first remote listed. Lines look like
  * `origin\thttps://…\t(fetch)` — only `(fetch)` rows are considered.
@@ -872,7 +901,7 @@ export async function snapshotForSession(
   }
   const root = workspace.root
 
-  const [branchRes, headRes, statusRes, aheadBehindRes, lastCommitRes, worktreeNumRes, stagedNumRes, remoteRes] = await Promise.all([
+  const [branchRes, headRes, statusRes, aheadBehindRes, lastCommitRes, worktreeNumRes, stagedNumRes, remoteRes, upstreamRefRes] = await Promise.all([
     runCommand(deps.run, ['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], root, 'branch', deps.signal),
     runCommand(deps.run, ['git', 'rev-parse', '--short', 'HEAD'], root, 'head', deps.signal),
     runCommand(deps.run, ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], root, 'status', deps.signal),
@@ -883,6 +912,11 @@ export async function snapshotForSession(
     // `git remote -v` lists every remote's fetch/push URL; parsed into the
     // primary remote (origin, else the first) for the left-column status bar.
     runCommand(deps.run, ['git', 'remote', '-v'], root, 'remote', deps.signal),
+    // `@{upstream}`'s full ref, for the sync flow: the client re-checks this
+    // exact tracking ref before merging, so it never has to guess
+    // `origin/<branch>` from a short name. A missing upstream exits non-zero,
+    // exactly like the ahead/behind probe above.
+    runCommand(deps.run, ['git', 'rev-parse', '--symbolic-full-name', '@{upstream}'], root, 'upstream-ref', deps.signal),
   ])
 
   const branch = 'run' in branchRes && branchRes.run.exitCode === 0 ? branchRes.run.stdout.trim() || null : null
@@ -949,6 +983,9 @@ export async function snapshotForSession(
 
   const remotes = 'run' in remoteRes && remoteRes.run.exitCode === 0 ? parseFetchRemotes(remoteRes.run.stdout) : []
   const remote = remotes.find((r) => r.name === 'origin') ?? remotes[0] ?? null
+  // The upstream is only actionable when it lives on a configured remote:
+  // a local (`.` remote) branch has nothing to fetch or push.
+  const upstream = hasUpstream ? parseUpstreamRef(upstreamRefRes, remotes) : undefined
 
   // A same-named branch already on a remote at HEAD means publishing would push
   // nothing; only the local tracking config is missing, so the panel can offer
@@ -1021,6 +1058,7 @@ export async function snapshotForSession(
     ahead,
     behind,
     hasUpstream,
+    ...(upstream !== undefined ? { upstream } : {}),
     remoteCandidates,
     remote,
     lastCommit,

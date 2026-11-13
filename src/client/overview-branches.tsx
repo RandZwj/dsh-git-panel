@@ -92,7 +92,12 @@ function renderBranchList(tree: BranchTree | null, treeError: boolean, activeRef
       : null
     return h('div', {
       key: b.name, className: cls, style: { paddingLeft: BRANCH_BASE + depth * BRANCH_INDENT }, title: b.name,
-      ...cb.menu?.({ name: b.name, isCurrent, isRemote: sectionKey === 'remote', isTag: sectionKey === 'tags', ...(b.ref === undefined ? {} : { ref: b.ref }) }),
+      ...cb.menu?.({
+        name: b.name, isCurrent, isRemote: sectionKey === 'remote', isTag: sectionKey === 'tags',
+        ...(b.ref === undefined ? {} : { ref: b.ref }),
+        ...(b.ahead === undefined ? {} : { ahead: b.ahead }),
+        ...(b.behind === undefined ? {} : { behind: b.behind }),
+      }),
       'data-current': isCurrent ? 'true' : undefined, 'data-primary': isPrimary ? 'true' : undefined,
       // Keyboard parity with the dir rows below: a leaf row is a toggle button
       // (filter on/off), and inside a focus trap (the compact sheet) it must be

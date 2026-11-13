@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runRemoteAction, runSnapshotAction } from '../../lib/testkit.mjs'
+import { runRemoteAction, runSnapshotAction, runSnapshotSequence } from '../../lib/testkit.mjs'
 
 function fixture() {
   const state = { busy: false, error: null }
@@ -140,4 +140,38 @@ test('runRemoteAction claims the same ref', async () => {
   ])
   assert.equal(runs, 1, 'the tag path shares the guard, not its own copy')
   assert.equal(inFlight.current, false)
+})
+
+test('runSnapshotSequence: the sync merge runs before the push it enables', async () => {
+  const { env } = refFixture()
+  const seen = []
+  await runSnapshotSequence(env, async (action) => { seen.push(action.kind); return { ok: true } }, [
+    { kind: 'branch-merge', name: 'refs/remotes/origin/main' },
+    { kind: 'push' },
+  ], 'fallback')
+  assert.deepEqual(seen, ['branch-merge', 'push'])
+})
+
+test('runSnapshotSequence: a refused merge never reaches the push', async () => {
+  const { state, env, inFlight } = refFixture()
+  const seen = []
+  await runSnapshotSequence(env, async (action) => {
+    seen.push(action.kind)
+    return action.kind === 'branch-merge' ? { ok: false, error: 'merge conflict' } : { ok: true }
+  }, [{ kind: 'branch-merge', name: 'refs/remotes/origin/main' }, { kind: 'push' }], 'fallback')
+  assert.deepEqual(seen, ['branch-merge'], 'the sequence stops at the first failure')
+  assert.equal(state.error, 'merge conflict', 'the failure keeps the host-localized text')
+  assert.equal(state.busy, false)
+  assert.equal(inFlight.current, false, 'the busy window closes so the reader can retry')
+})
+
+test('runSnapshotSequence: one press owns the whole sequence', async () => {
+  const { env } = refFixture()
+  let calls = 0
+  const run = async () => { calls += 1; return { ok: true } }
+  await Promise.all([
+    runSnapshotSequence(env, run, [{ kind: 'push' }], 'fallback'),
+    runSnapshotSequence(env, run, [{ kind: 'push' }], 'fallback'),
+  ])
+  assert.equal(calls, 1, 'the ref drops the second press before busy repaints')
 })

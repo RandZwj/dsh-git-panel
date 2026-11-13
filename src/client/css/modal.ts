@@ -48,6 +48,7 @@ export const CSS = `
 .gp-modal--sm{width:min(460px,92vw);height:auto;max-height:min(560px,86vh)}
 .gp-modal__form{flex:1;min-height:0;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
 .gp-modal__confirmtext{font-size:13px;line-height:1.6;color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word}
+.gp-confirm__noask{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer}
 /* busy overlay (e.g. pull in flight): a scrim + spinner + indeterminate bar */
 .gp-modal__overlay{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:20px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-2) 82%,transparent);backdrop-filter:blur(1.5px);border-radius:inherit;animation:gp-fade-in .12s ease}
 .gp-modal__overlay-label{font-size:12px;color:var(--dsw-alias-label-secondary)}

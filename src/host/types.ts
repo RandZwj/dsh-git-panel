@@ -146,6 +146,20 @@ export interface GitSnapshot {
   readonly behind: number
   /** True when the current branch tracks an upstream (@{upstream} resolves). */
   readonly hasUpstream: boolean
+  /**
+   * The current branch's upstream, when it lives on a configured remote.
+   * `ref` is the full tracking ref the host re-checks before merging, `remote`
+   * the configured remote name and `branch` the branch on that remote (split
+   * against the configured remote names, so a slashed remote name is not
+   * mistaken for part of the branch). Absent when there is no upstream, when
+   * the upstream is a local (`.` remote) branch, or on hosts that predate the
+   * field — the client then keeps its single-intent sync controls.
+   */
+  readonly upstream?: {
+    readonly remote: string
+    readonly branch: string
+    readonly ref: string
+  }
   /** Every remote whose same-named branch points at HEAD, in `git remote -v`
    * order; empty otherwise. Local refs only (no network). Absent on hosts that
    * predate the `set-upstream` action → read as empty, so the client keeps
@@ -214,6 +228,8 @@ export interface GitSnapshot {
     readonly remoteBranchDelete?: true
     /** `branch-create` runs here (same reasoning as `commitCheckout`). */
     readonly branchCreate?: true
+    /** `push-branch` runs here: the branch row's own push entry. */
+    readonly branchPush?: true
     /** `branch-merge` runs here. */
     readonly branchMerge?: true
     /** `cherry-pick` runs here. */
@@ -328,6 +344,11 @@ export type GitAction =
   // branch to the remote tip (never a merge/rebase) — the safe "catch up to
   // remote" the UI offers when the branch is strictly behind.
   | { readonly kind: 'pull-ff' }
+  // Push one *named* local branch to its own upstream (`git push <remote>
+  // <branch>`, never --force). Offered from a branch row's menu for a branch
+  // that is strictly ahead of its upstream; the host re-resolves the remote from
+  // the branch's tracking config and re-checks the divergence before pushing.
+  | { readonly kind: 'push-branch'; readonly name: string }
   // Push the current branch to its upstream (plain `git push`, never --force).
   // The UI offers it only when the branch is strictly ahead (ahead>0, behind=0),
   // so the push can only fast-forward the remote; a diverged branch is refused
@@ -416,6 +437,10 @@ export type GitErrorCode =
   | 'not-ff'
   // A push was rejected by the remote (non-fast-forward: the remote advanced).
   | 'push-rejected'
+  // A branch-row push named a branch with no upstream on a configured remote.
+  | 'no-upstream'
+  // A branch-row push found the branch no longer strictly ahead of its upstream.
+  | 'branch-not-ahead'
   // A network git command failed on authentication (no usable credentials;
   // GIT_TERMINAL_PROMPT=0 makes an interactive prompt fail fast instead).
   | 'auth-failed'

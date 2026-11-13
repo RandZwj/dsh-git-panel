@@ -35,6 +35,22 @@
 `resolveWorkspace` 的 `repoDirFor` 失败之后，和 `codeWorkspace` 并列。补
 `test/unit` 用例，并保持 `codeWorkspace` 默认行为不变。
 
+## 本地改动（2026-11-12）：分叉同步 + 堆叠布局左栏可拖
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/host/types.ts` / `src/host/core.ts` | `GitSnapshot.upstream`（remote/branch/ref）：`git rev-parse --symbolic-full-name @{upstream}` + 已配置远端名最长匹配拆分；每次快照多一条本地命令 |
+| `src/client/push-policy.ts` | `canSync()`：仅分叉 + 有远端上游 + host 具备 `branchMerge` |
+| `src/client/OverviewTab.tsx` / `overview-statusbar.tsx` | 「同步」按钮 + 确认框（含「以后不再询问」，`localStorage: gp.sync.noAsk`）+ 合并后推送 |
+| `src/client/op-runner.ts` | `runSnapshotSequence()`：一次忙碌窗口内顺序执行，首个失败即停止（合并被拒时绝不继续推送） |
+| `src/client/OverviewTab.tsx` / `css/stacked.ts` | stacked 布局左栏加拖拽分割线（`gp.overview.stackLeft`），去掉该栏自身的 border 免得双线 |
+| `docs/adr/0031-diverged-sync-merge-then-push.md` | 新 ADR：为什么这不是 pull、为什么必须确认、为什么冲突要中止 |
+| `src/host/types.ts` / `src/host/actions.ts` | `push-branch` 动作：从分支自己的 tracking 配置解析远端，重查存在性与严格领先后 `git push <remote> <branch>`（不 force） |
+| `src/client/overview-menu.ts` / `OverviewTab.tsx` / `overview-branches.tsx` | 分支行菜单：当前分支的同步/更新/推送，其他严格领先分支的「推送此分支」；能力位 `branchPush` |
+| `docs/adr/0032-branch-row-push.md` | 新 ADR：按名推送为什么必须由 host 解析远端 |
+
+这条改动与上游的「分叉时什么都不提供」不同（ADR-0007），是本 fork 的本地行为；若上游接受，需要按 ADR-0007 的要求走他们的评审。
+
 ## 升级上游后的检查单
 
 1. `git fetch upstream --tags`，看 `git log main..upstream/main --oneline`

@@ -46,6 +46,14 @@ export interface OverviewMenuCommands {
   /** Open the cherry-pick confirmation for one commit onto the current
    * branch (issue #118). */
   readonly openCherryPick: (value: CommitTargetValue) => void
+  /** Merge the current branch's upstream, then push it (the status bar's sync). */
+  readonly syncUpstream: () => void
+  /** Fast-forward the current branch from its upstream. */
+  readonly pullUpstream: () => void
+  /** Push the current branch to its upstream. */
+  readonly pushUpstream: () => void
+  /** Push one named local branch to its own upstream (never a force). */
+  readonly pushBranch: (value: BranchTargetValue) => void | Promise<void>
   /** Put the commit's reference into the session's composer (quote.ts). */
   readonly quote: (text: string) => void
 }
@@ -73,6 +81,13 @@ export interface OverviewMenuFacts {
    * land on the current branch, so their entries are offered only while one
    * exists. */
   readonly currentBranch?: string | null
+  /** The current branch tracks an upstream (the snapshot's `hasUpstream`). */
+  readonly hasUpstream?: boolean
+  /** The merge-based sync is available (`canSync`): diverged, upstream on a
+   * configured remote, and the host can run the confirmed merge. */
+  readonly syncReady?: boolean
+  /** The host declared `capabilities.branchPush` (the branch row's own push). */
+  readonly branchPush?: boolean
 }
 
 /** Branch-row entries: switch, create / merge (issue #118), history filter,
@@ -94,6 +109,57 @@ export function branchMenuActions(
       disabled: facts.busy,
       failureLabel: env.t('common.operationFailed'),
       run: () => cmds.switchBranch(value),
+    })
+  }
+  // The current branch's own sync entries, mirroring the status bar (IDEA's
+  // branch popup): sync (merge upstream, then push), update (fast-forward) and
+  // push. Each is offered only in the state it applies to, so a row never shows
+  // an action git would refuse; the status bar keeps the same controls.
+  if (isBranch && !value.isRemote && value.isCurrent) {
+    if (facts.syncReady === true) {
+      group.push({
+        id: 'sync-branch',
+        label: env.t('menu.syncBranch'),
+        icon: menuIcon('sync'),
+        disabled: facts.busy,
+        failureLabel: env.t('common.operationFailed'),
+        run: () => cmds.syncUpstream(),
+      })
+    }
+    if (facts.hasUpstream === true && (value.behind ?? 0) > 0 && (value.ahead ?? 0) === 0) {
+      group.push({
+        id: 'update-branch',
+        label: env.t('menu.updateBranch'),
+        icon: menuIcon('pull'),
+        disabled: facts.busy,
+        failureLabel: env.t('common.operationFailed'),
+        run: () => cmds.pullUpstream(),
+      })
+    }
+    if (facts.hasUpstream === true && (value.ahead ?? 0) > 0 && (value.behind ?? 0) === 0) {
+      group.push({
+        id: 'push-current',
+        label: env.t('menu.pushBranch'),
+        icon: menuIcon('push'),
+        disabled: facts.busy,
+        failureLabel: env.t('common.operationFailed'),
+        run: () => cmds.pushUpstream(),
+      })
+    }
+  }
+  // Any other local branch that is strictly ahead of its own upstream: push it
+  // by name, without checking it out. A diverged branch is not offered — the
+  // remote would reject it — and the host re-checks both the upstream and the
+  // divergence before pushing.
+  if (facts.branchPush === true && isBranch && !value.isRemote && !value.isCurrent
+    && (value.ahead ?? 0) > 0 && (value.behind ?? 0) === 0) {
+    group.push({
+      id: 'push-branch',
+      label: env.t('menu.pushBranch'),
+      icon: menuIcon('push'),
+      disabled: facts.busy,
+      failureLabel: env.t('common.operationFailed'),
+      run: () => cmds.pushBranch(value),
     })
   }
   // The row's addressable ref (issue #118): local rows fall back to their

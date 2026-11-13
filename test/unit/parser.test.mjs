@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseStatus, parseGraphLog, parseBranches, parseNameStatus, parseTags, parseStashList, sumNumstat, parseRefs } from '../../lib/testkit.mjs'
+import { parseStatus, parseGraphLog, parseBranches, parseNameStatus, parseTags, parseStashList, sumNumstat, parseRefs, parseUpstreamRef } from '../../lib/testkit.mjs'
 
 test('parseStatus splits a mixed XY into staged + unstaged sides', () => {
   const z = 'MM a.txt\0 M b.txt\0M  c.txt\0?? d.txt\0'
@@ -201,4 +201,23 @@ test('parseStashList ignores empty / malformed records', () => {
   assert.deepEqual(parseStashList('\x00\x00'), [])
   // A record with no stash@{N} selector is skipped.
   assert.deepEqual(parseStashList('notaselector\x1fsha\x1fx\x1fy\x00'), [])
+})
+
+test('the upstream ref is split against the configured remote names', () => {
+  const remotes = [{ name: 'origin' }, { name: 'work/fork' }]
+  const run = (stdout) => ({ run: { exitCode: 0, stdout } })
+  assert.deepEqual(parseUpstreamRef(run('refs/remotes/origin/main\n'), remotes), {
+    remote: 'origin', branch: 'main', ref: 'refs/remotes/origin/main',
+  })
+  // A remote name may itself contain a slash: the longest match wins, so
+  // `work/fork/topic` is the branch `topic` on the remote `work/fork`.
+  assert.deepEqual(parseUpstreamRef(run('refs/remotes/work/fork/topic'), remotes), {
+    remote: 'work/fork', branch: 'topic', ref: 'refs/remotes/work/fork/topic',
+  })
+  // No upstream (git exits non-zero), a local `.` upstream, an unknown remote,
+  // and a branch-less ref all yield nothing rather than a guessed remote.
+  assert.equal(parseUpstreamRef({ run: { exitCode: 1, stdout: '' } }, remotes), undefined)
+  assert.equal(parseUpstreamRef({ run: { exitCode: 0, stdout: 'refs/heads/other' } }, remotes), undefined)
+  assert.equal(parseUpstreamRef({ run: { exitCode: 0, stdout: 'refs/remotes/elsewhere/main' } }, remotes), undefined)
+  assert.equal(parseUpstreamRef({ run: { exitCode: 0, stdout: 'refs/remotes/origin/' } }, remotes), undefined)
 })

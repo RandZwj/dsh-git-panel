@@ -56,7 +56,11 @@ test('the final snapshot exposes its deterministic SHA-256 business fingerprint 
   assert.equal(first.snapshot.stateFingerprint, snapshotFingerprint(first.snapshot))
   assert.equal(first.snapshot.stateFingerprint, second.snapshot.stateFingerprint)
   assert.deepEqual(first.commands, second.commands)
-  assert.equal(first.commands.length, 9, 'workspace resolution plus the existing eight snapshot commands')
+  // Nine business commands: the original eight (branch, head, status,
+  // ahead/behind, last commit, two numstat passes, remote list) plus the
+  // upstream ref the merge-based sync re-checks. Workspace resolution precedes
+  // them. Any further growth has to come with a field that needs it.
+  assert.equal(first.commands.length, 10, 'workspace resolution plus the nine snapshot commands')
 })
 
 test('fingerprint uses SHA-256 over recursively ordered business JSON', async () => {

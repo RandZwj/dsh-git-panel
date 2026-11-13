@@ -30,7 +30,7 @@ import { useCopyFeedback } from './copy-feedback.js'
 import { NoticeBar, useDismissedNotices } from './notice.js'
 import { useResizableColumn, useStackedSplit } from './resizable.js'
 import { opErrorText, renderConfirmModal } from './ops-modals.js'
-import { runRemoteAction, runSnapshotAction } from './op-runner.js'
+import { runRemoteAction, runSnapshotAction, runSnapshotSequence } from './op-runner.js'
 import { renderResetModal, renderTagCreateModal } from './overview-modals.js'
 import { renderBranchSwitchConfirm } from './branch-switch.js'
 import { renderBranchDeleteConfirm, renderRemoteBranchDeleteConfirm } from './branch-delete.js'
@@ -44,7 +44,8 @@ import { ReposSection, type RepositoriesHost } from './ReposSection.js'
 import { useRowSlider } from './row-slider.js'
 import { buildTops, windowRange, VIEWPORT_FALLBACK, VOVERSCAN } from './virtual-list.js'
 import { useViewportTracker } from './use-viewport.js'
-import { canPush, canSetUpstream } from './push-policy.js'
+import { canPush, canSetUpstream, canSync } from './push-policy.js'
+import { useSyncFlow } from './sync-flow.js'
 import { useGitQuerySignal } from './registry.js'
 import type { QueryKey } from './query-key.js'
 import { BranchScroll, renderBranchSheet, type BranchTrees } from './overview-branches.js'
@@ -287,6 +288,12 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
   // Double-click window guard for the direct status-bar push (see runPushDirect).
   const pushInFlight = useRef(false)
   const [pushBusy, setPushBusy] = useState(false)
+  // The merge-based sync: a diverged branch is reconciled by the confirmed
+  // merge the panel already owns, then the ordinary push. It keeps its own
+  // busy window (two writes, one press) and asks once unless the reader opted
+  // out (see sync-preference.ts).
+  const [syncRunBusy, setSyncRunBusy] = useState(false)
+  const syncRunInFlight = useRef(false)
   // Set-upstream always opens its chooser; the modal owns the in-flight lock
   // and reports it back through `setUpstreamBusy` (the status-bar busy state).
   const [setUpstreamBusy, setSetUpstreamBusy] = useState(false)
@@ -398,7 +405,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
   const branchMenu = useMemo(
     () => (panelMenu === undefined
       ? undefined
-      : (value: { name: string; isCurrent: boolean; isRemote: boolean; isTag: boolean; ref?: string }) => panelMenu.bind(MENU_KIND.branch, value)),
+      : (value: { name: string; isCurrent: boolean; isRemote: boolean; isTag: boolean; ref?: string; ahead?: number; behind?: number }) => panelMenu.bind(MENU_KIND.branch, value)),
     [panelMenu],
   )
   const commitMenu = useMemo(
@@ -438,7 +445,26 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
     }
   }
   const opScopeRef = useRef<string | null>(null)
-  const opDialogOpen = resetTarget !== null || revertTarget !== null || switchTarget !== null || checkoutTarget !== null || branchToDelete !== null || remoteBranchToDelete !== null || branchMergeTarget !== null || pickTarget !== null
+  // Sync = the one-click reconciliation VS Code users expect, spelled with the
+  // two writes the panel already owns: a *confirmed* `branch-merge` of the
+  // upstream ref, then the ordinary `push`. It is deliberately not `git pull`
+  // (whose merge/rebase behaviour follows the user's git config) and never a
+  // force: after the merge the branch is strictly ahead, so the push is a
+  // fast-forward. A conflict is aborted by the host, leaving the tree as it was.
+  const runSyncNow = (): Promise<void> => {
+    if (!canSync(snapshot) || snapshot.upstream === undefined) return Promise.resolve()
+    return runSnapshotSequence(
+      { busy: syncRunBusy, setBusy: setSyncRunBusy, inFlight: syncRunInFlight, setError: statusReporter() },
+      onAction,
+      [{ kind: 'branch-merge', name: snapshot.upstream.ref }, { kind: 'push' }],
+      t('error.generic'),
+    )
+  }
+  // The confirmation, its preference and the "don't ask again" answer are
+  // shared with the changes toolbar (`sync-flow.tsx`); this tab only supplies
+  // its own run and its own busy/error slots.
+  const sync = useSyncFlow({ snapshot, busy: syncRunBusy, error: syncError, t, onRun: runSyncNow })
+  const opDialogOpen = resetTarget !== null || revertTarget !== null || switchTarget !== null || checkoutTarget !== null || branchToDelete !== null || remoteBranchToDelete !== null || branchMergeTarget !== null || pickTarget !== null || sync.open
   const opInFlight = opBusy || switchBusy
   // The runs the menu offers, closing over this render's state (the owner reads
   // the published object at resolve time, so a fresh one each render is enough).
@@ -460,6 +486,18 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
     openBranchCreate: (target) => { setOpError(null); setBranchCreateTarget(target) },
     openBranchMerge: (target) => { setOpError(null); setBranchMergeTarget(target) },
     openCherryPick: (value) => { setOpError(null); setPickTarget({ hash: value.hash, shortHash: value.shortHash, subject: value.subject }) },
+    // The current branch's sync entries reuse the status-bar runs, so the two
+    // surfaces can never diverge in what they offer.
+    syncUpstream: sync.request,
+    pullUpstream: () => { void runPullFf() },
+    pushUpstream: () => { void runPushDirect() },
+    // A named branch's push: the menu's own `failureLabel` is the feedback, so
+    // the failure rejects here instead of landing in the status bar.
+    pushBranch: async (value) => {
+      const res = await remote.run({ sessionId, action: { kind: 'push-branch', name: value.name } })
+      if (!res.ok) throw new Error(res.error.message ?? t('common.operationFailed'))
+      onResync()
+    },
     quote: onQuote ?? (() => {}),
   }
   // Publish the overview's runs and busy flag for the menu owner. A fresh object
@@ -479,6 +517,9 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
       branchCreate: snapshot.capabilities?.branchCreate === true,
       branchMerge: snapshot.capabilities?.branchMerge === true,
       cherryPick: snapshot.capabilities?.cherryPick === true,
+      branchPush: snapshot.capabilities?.branchPush === true,
+      hasUpstream: snapshot.hasUpstream === true,
+      syncReady: canSync(snapshot),
       currentBranch: snapshot.branch,
     }
   }
@@ -847,10 +888,11 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
   }
   // One status-bar callback set, shared by the wide and compact placements.
   const statusCbs = {
-    syncBusy, syncError, pullBusy, pushBusy, publishBusy, setUpstreamBusy, switchBusy,
+    syncBusy, syncError, pullBusy, pushBusy, publishBusy, setUpstreamBusy, switchBusy, syncRunBusy,
     onCheck: () => void runCheckSync(),
     onPull: () => void runPullFf(),
     onPush: () => void runPushDirect(),
+    onSync: sync.request,
     onSetUpstream: openSetUpstream,
     onPublish: () => { setOpError(null); setPublishConfirm(true) },
     t,
@@ -931,6 +973,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
       onClose: () => setBranchCreateTarget(null),
       t,
     }) : null,
+    sync.dialog,
     branchMergeTarget !== null ? renderConfirmModal({
       title: t('merge.title'),
       // The body names both sides; a dirty tree can still make git refuse (or

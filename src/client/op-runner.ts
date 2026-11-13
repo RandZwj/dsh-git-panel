@@ -58,6 +58,38 @@ export async function runRemoteAction(
   }
 }
 
+/**
+ * Run several work-tree actions in order, stopping at the first failure.
+ *
+ * The sync flow is the reason this exists: merging the upstream and pushing
+ * afterwards are two writes, and a refused merge (a conflict the host already
+ * aborted, a dirty tree, a missing ref) must never be followed by a push. The
+ * error slot carries the first failure only, and the whole sequence shares one
+ * busy window so a second press cannot interleave.
+ */
+export async function runSnapshotSequence(
+  env: OpEnv,
+  run: (action: GitAction) => Promise<{ readonly ok: boolean; readonly error?: string }>,
+  actions: readonly GitAction[],
+  fallback: string,
+): Promise<void> {
+  if (!claim(env)) return
+  env.setError(null)
+  try {
+    for (const action of actions) {
+      const res = await run(action)
+      if (!res.ok) {
+        env.setError(res.error ?? fallback)
+        return
+      }
+    }
+  } catch (error) {
+    env.setError(error instanceof Error ? error.message : fallback)
+  } finally {
+    release(env)
+  }
+}
+
 /** Work-tree writes (`onAction`): the reply carries the fresh snapshot, and its
  * failure is already localized. */
 export async function runSnapshotAction(

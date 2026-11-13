@@ -33,7 +33,8 @@ import { useHoverTip } from './tip.js'
 import { ChangesToolbar } from './ChangesToolbar.js'
 import { PublishModal } from './PublishModal.js'
 import { SetUpstreamModal } from './SetUpstreamModal.js'
-import { canPush, canSetUpstream } from './push-policy.js'
+import { canPush, canSetUpstream, canSync } from './push-policy.js'
+import { useSyncFlow } from './sync-flow.js'
 import { ChangesDiffPane } from './ChangesDiffPane.js'
 import { DiffCardBackdrop, useDiffCard } from './diff-card.js'
 import { ReposSection, type RepositoriesHost } from './ReposSection.js'
@@ -101,6 +102,11 @@ export function ChangesTab({ panelMenu, menuCommandsRef, menuFactsRef, menuPickR
   // state here so the rest of the toolbar locks with it.
   const [setUpstreamOpen, setSetUpstreamOpen] = useState(false)
   const [setUpstreamBusy, setSetUpstreamBusy] = useState(false)
+  // The diverged branch's sync: one press, two writes (merge the upstream, then
+  // push). The confirm dialog and its "don't ask again" answer are shared with
+  // the overview (sync-flow.tsx); this tab supplies the busy/error slots and the
+  // sequence.
+  const syncInFlight = useRef(false)
   // Expanding a truncated list is itself a snapshot flight: it locks the same
   // controls `busy` does so a pick cannot race the incoming full list.
   const [expanding, setExpanding] = useState(false)
@@ -444,6 +450,22 @@ export function ChangesTab({ panelMenu, menuCommandsRef, menuFactsRef, menuPickR
       setBusy(false)
     }
   }
+
+  // Merge the upstream, then push — never a pull, never a force. `run` already
+  // stops the tab on a failure and reports it, so a refused merge (a conflict
+  // the host aborted, a dirty tree) can never be followed by a push.
+  const runSync = async (): Promise<void> => {
+    if (syncInFlight.current || !canSync(snapshot) || snapshot.upstream === undefined) return
+    syncInFlight.current = true
+    try {
+      if (await run({ kind: 'branch-merge', name: snapshot.upstream.ref })) {
+        await run({ kind: 'push' })
+      }
+    } finally {
+      syncInFlight.current = false
+    }
+  }
+  const sync = useSyncFlow({ snapshot, busy, error, t, onRun: runSync })
 
   const commit = async (): Promise<void> => {
     const text = message.trim()
@@ -809,6 +831,7 @@ export function ChangesTab({ panelMenu, menuCommandsRef, menuFactsRef, menuPickR
         pushInFlight.current = true
         void run({ kind: 'push' }).finally(() => { pushInFlight.current = false })
       },
+      onSync: () => { hideTip(); sync.request() },
       // Config-only, but always asks which remote to attach (even with one
       // candidate). The modal re-checks the snapshot and owns the busy lock.
       onSetUpstream: () => {
@@ -919,6 +942,9 @@ export function ChangesTab({ panelMenu, menuCommandsRef, menuFactsRef, menuPickR
     diffCard.visible ? h(DiffCardBackdrop, { key: 'diff-backdrop', onClose: diffCard.close }) : null,
     publishOpen ? h(PublishModal, { key: 'remote-publish', snapshot, onAction, onClose: () => setPublishOpen(false), onBusyChange: setPublishBusy, t }) : null,
     setUpstreamOpen ? h(SetUpstreamModal, { key: 'remote-set-upstream', snapshot, onAction, onClose: () => setSetUpstreamOpen(false), onBusyChange: setSetUpstreamBusy, t }) : null,
+    // The sync confirmation renders above the toolbar; its own checkbox is the
+    // only thing that remembers the answer.
+    sync.dialog,
     stashPushOpen ? h(StashPushModal, { key: 'push', onClose: () => setStashPushOpen(false), onStash: stashPush, error, t }) : null,
     stashDrop !== null ? renderConfirmModal({
       title: t('stash.dropTitle'),

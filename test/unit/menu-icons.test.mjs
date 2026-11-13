@@ -21,7 +21,7 @@ const env = { t, menus: { notify: () => {} }, writeClipboard: async () => true, 
 const identity = { sessionId: 's', owner: 'o', repo: '' }
 const value = { ...identity, path: 'src/a.ts', root: '/work', ignored: false }
 
-const overviewCommands = { switchBranch: () => {}, filterRef: () => {}, openTagCreate: () => {}, openBranchDelete: () => {}, openRemoteBranchDelete: () => {}, openBranchCreate: () => {}, openBranchMerge: () => {}, openCherryPick: () => {}, openRevert: () => {}, openReset: () => {}, quote: () => {} }
+const overviewCommands = { switchBranch: () => {}, filterRef: () => {}, openTagCreate: () => {}, openBranchDelete: () => {}, openRemoteBranchDelete: () => {}, openBranchCreate: () => {}, openBranchMerge: () => {}, openCherryPick: () => {}, openRevert: () => {}, openReset: () => {}, quote: () => {}, syncUpstream: () => {}, pullUpstream: () => {}, pushUpstream: () => {}, pushBranch: () => {} }
 const changesCommands = { openDiff: () => {}, stage: () => {}, openDiscard: () => {}, stashApply: () => {}, stashPop: () => {}, openStashDrop: () => {} }
 const reposCommands = { fetch: () => {} }
 const pillCommands = { openTab: () => {}, fetch: () => {} }
@@ -33,6 +33,12 @@ function everyMenu() {
     ['file', fileMenuActions(value, env, [{ id: 'open-in-app.file/float', label: 'x' }])],
     ['directory', directoryMenuActions(value, env, [])],
     ['branch', branchMenuActions({ ...identity, name: 'main', isCurrent: false, isRemote: false }, env, overviewCommands, { busy: false, branchDelete: true, branchCreate: true, branchMerge: true, currentBranch: 'main' })],
+    // The current branch's own sync trio, and another branch's own push: each
+    // state carries its glyph like every other write entry.
+    ['branch-current-sync', branchMenuActions({ ...identity, name: 'main', isCurrent: true, isRemote: false, ahead: 2, behind: 3 }, env, overviewCommands, { busy: false, hasUpstream: true, syncReady: true, currentBranch: 'main' })],
+    ['branch-current-update', branchMenuActions({ ...identity, name: 'main', isCurrent: true, isRemote: false, ahead: 0, behind: 3 }, env, overviewCommands, { busy: false, hasUpstream: true, currentBranch: 'main' })],
+    ['branch-current-push', branchMenuActions({ ...identity, name: 'main', isCurrent: true, isRemote: false, ahead: 3, behind: 0 }, env, overviewCommands, { busy: false, hasUpstream: true, currentBranch: 'main' })],
+    ['branch-other-push', branchMenuActions({ ...identity, name: 'feature/x', isCurrent: false, isRemote: false, ahead: 1, behind: 0 }, env, overviewCommands, { busy: false, branchPush: true, currentBranch: 'main' })],
     ['branch-remote', branchMenuActions({ ...identity, name: 'origin/x', isCurrent: false, isRemote: true, ref: 'refs/remotes/origin/x' }, env, overviewCommands, { busy: false, remoteBranchDelete: true, branchCreate: true, branchMerge: true, currentBranch: 'main' })],
     ['commit', commitMenuActions({ ...identity, hash: 'a'.repeat(40), shortHash: 'aaaaaaa', subject: 's' }, env, overviewCommands, { busy: false, branchCreate: true, cherryPick: true, currentBranch: 'main' })],
     ['change', changeMenuActions({ ...identity, path: 'a.ts', staged: false }, env, changesCommands, { busy: false }, new Set())],
@@ -78,6 +84,12 @@ test('each family uses its own glyph, not one shared blob', () => {
   // Issue #118: create reuses the branch glyph, merge and pick draw their own.
   assert.equal(icons.get('create-branch'), MENU_ICONS.branch)
   assert.equal(icons.get('merge-branch'), MENU_ICONS.merge)
+  // The sync trio reuses the fetch glyph for a merge-based sync and update, and
+  // the upload glyph for every push-shaped entry.
+  assert.equal(icons.get('sync-branch'), MENU_ICONS.sync)
+  assert.equal(icons.get('update-branch'), MENU_ICONS.pull)
+  assert.equal(icons.get('push-current'), MENU_ICONS.push)
+  assert.equal(icons.get('push-branch'), MENU_ICONS.push)
   assert.equal(icons.get('cherry-pick'), MENU_ICONS.pick)
   assert.equal(icons.get('reset'), MENU_ICONS.reset)
   assert.equal(icons.get('discard'), MENU_ICONS.discard)

@@ -71,6 +71,11 @@ export interface BranchTargetValue extends MenuIdentity {
    * to name the exact tracking ref: the host resolves remote + branch from the
    * configured remotes rather than guessing at a slash. */
   readonly ref?: string
+  /** This branch's own divergence from its upstream, as the row draws it.
+   * Absent when the branch has no upstream or is in sync, which is exactly
+   * when neither a push nor an update applies. */
+  readonly ahead?: number
+  readonly behind?: number
 }
 
 /** One commit row (history list or the detail header). */
