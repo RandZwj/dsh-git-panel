@@ -54,6 +54,7 @@ export const CSS = `
 .gp-overview--stacked{flex-direction:column}
 .gp-overview__top{display:flex;flex:0 0 55%;min-height:0;position:relative}
 .gp-overview--stacked .gp-col--left{flex:0 0 clamp(120px,38%,180px);min-width:0;border-right:1px solid var(--dsw-alias-border-l2)}
+.gp-overview--stacked .gp-col--left--split{border-right:0}
 .gp-overview--stacked>.gp-detail{height:auto;flex:1 1 45%;min-height:0}
 
 /* Stacked history toolbar: search takes the first row; the author / since

@@ -618,6 +618,11 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
   // Stacked only reads it here (hooks run unconditionally); the wide layout
   // ignores the value. The split is shared across the three stacked surfaces.
   const split = useStackedSplit(t('resizer.resetHeight'))
+  // The two-band layout's own branch-column width: the wide pair of dividers
+  // keeps the three-column arrangement, while stacked clamps this column to
+  // the narrower band ADR-0023 describes. Its own key, so the two layouts
+  // never fight over one stored width.
+  const stackLeftCol = useResizableColumn({ storageKey: 'gp.overview.stackLeft', initial: 160, min: 120, reserve: 220, edge: 'end', resetTitle: t('resizer.resetWidth') })
 
   const setRef = (ref: string | null): void => writeFilter({ ref })
 
@@ -1343,7 +1348,13 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
         }),
         historyCol,
       ]
-      : [h('div', { key: 'left', className: 'gp-col gp-col--left' }, leftChildren), historyCol]
+      // The band's branch column is drag-resizable through its own divider;
+      // `--split` drops the column's own border so the hairline is drawn once.
+      : [
+        h('div', { key: 'left', className: 'gp-col gp-col--left gp-col--left--split', style: { flex: `0 0 ${stackLeftCol.width}px` } }, leftChildren),
+        stackLeftCol.divider,
+        historyCol,
+      ]
     return h('div', { className: 'gp-overview gp-overview--stacked' }, [
       fileDiffModal,
       ...opModals,
