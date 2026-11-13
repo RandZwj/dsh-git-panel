@@ -33,6 +33,12 @@ export interface OverviewMenuCommands {
    * the safe `-d` runs first and only an unmerged refusal unlocks the forced
    * `-D` step. */
   readonly openBranchDelete: (value: BranchTargetValue) => void
+  /** Open the bulk delete confirmation for a set of local branches — a
+   * multi-selection, or every branch below a directory row. The same two-stage
+   * safe-then-forced flow runs over the whole set. */
+  readonly openBranchDeleteMany: (names: readonly string[]) => void
+  /** Pick every local branch below a directory row (its own branch included). */
+  readonly selectDirBranches: (path: string, names: readonly string[]) => void
   /** Open the "delete remote branch" confirmation for one remote row. The host
    * resolves the tracking ref to a configured remote; nothing local is deleted. */
   readonly openRemoteBranchDelete: (value: BranchTargetValue) => void
@@ -95,6 +101,10 @@ export interface OverviewMenuFacts {
 export function branchMenuActions(
   value: BranchTargetValue, env: MenuEnv, cmds: OverviewMenuCommands, facts: OverviewMenuFacts,
 ): MenuAction[] {
+  // A folded directory row is not a branch: it names the local branches below
+  // it, so its menu offers the two operations that act on that set — pick them,
+  // or delete them — and nothing that would address the directory as a ref.
+  if (value.dir !== undefined) return dirRowActions(value, env, cmds, facts)
   const group: MenuAction[] = []
   // A tag row reaches this builder through the shared row renderer. Its
   // `isCurrent` is false and its name is not in the switch map, so the entries
@@ -221,18 +231,37 @@ export function branchMenuActions(
   // same-named branch or fail. The checked-out branch is git's own refusal
   // (`branch-checked-out`), but the row already says HEAD, so the entry is not
   // offered for it at all.
-  if (facts.branchDelete === true && isBranch && !value.isRemote && !value.isCurrent) {
-    group.push({
-      id: 'delete-branch',
-      label: env.t('menu.deleteBranch'),
-      icon: menuIcon('delete'),
-      // Below one separator: the delete is never one slip away from "copy".
-      separatorBefore: true,
-      danger: true,
-      disabled: facts.busy,
-      failureLabel: env.t('common.operationFailed'),
-      run: () => cmds.openBranchDelete(value),
-    })
+  //
+  // A row inside a multi-selection deletes the whole picked set instead of
+  // itself: right-clicking a selected row must act on the selection the reader
+  // built (and never change it — ADR-0028). The current branch is never part of
+  // that set, even if a stale selection somehow held it.
+  if (facts.branchDelete === true && isBranch && !value.isRemote && !value.isTag) {
+    const picked = (value.selection ?? []).filter((name) => name !== facts.currentBranch)
+    if (picked.length > 1 && picked.includes(value.name)) {
+      group.push({
+        id: 'delete-selected-branches',
+        label: env.t('menu.deleteSelectedBranches', { count: picked.length }),
+        icon: menuIcon('delete'),
+        separatorBefore: true,
+        danger: true,
+        disabled: facts.busy,
+        failureLabel: env.t('common.operationFailed'),
+        run: () => cmds.openBranchDeleteMany(picked),
+      })
+    } else if (!value.isCurrent) {
+      group.push({
+        id: 'delete-branch',
+        label: env.t('menu.deleteBranch'),
+        icon: menuIcon('delete'),
+        // Below one separator: the delete is never one slip away from "copy".
+        separatorBefore: true,
+        danger: true,
+        disabled: facts.busy,
+        failureLabel: env.t('common.operationFailed'),
+        run: () => cmds.openBranchDelete(value),
+      })
+    }
   }
   // A remote row can only be deleted on its server, and the entry needs the
   // full tracking ref to name it: the row's short name is ambiguous when a
@@ -248,6 +277,40 @@ export function branchMenuActions(
       disabled: facts.busy,
       failureLabel: env.t('common.operationFailed'),
       run: () => cmds.openRemoteBranchDelete(value),
+    })
+  }
+  return group
+}
+
+/**
+ * A folded local directory's entries: pick every branch below it, or delete
+ * that whole set. Both act on the branch names the row already carried, so the
+ * menu never depends on the directory being expanded (a collapsed `feature/`
+ * still deletes every branch inside it).
+ */
+function dirRowActions(
+  value: BranchTargetValue, env: MenuEnv, cmds: OverviewMenuCommands, facts: OverviewMenuFacts,
+): MenuAction[] {
+  const names = value.dirBranches ?? []
+  const path = value.dir ?? ''
+  if (names.length === 0) return []
+  const group: MenuAction[] = [{
+    id: 'select-dir-branches',
+    label: env.t('menu.selectDirBranches', { count: names.length }),
+    icon: menuIcon('branch'),
+    disabled: facts.busy,
+    run: () => cmds.selectDirBranches(path, names),
+  }]
+  if (facts.branchDelete === true) {
+    group.push({
+      id: 'delete-dir-branches',
+      label: env.t('menu.deleteDirBranches', { count: names.length }),
+      icon: menuIcon('delete'),
+      separatorBefore: true,
+      danger: true,
+      disabled: facts.busy,
+      failureLabel: env.t('common.operationFailed'),
+      run: () => cmds.openBranchDeleteMany(names),
     })
   }
   return group

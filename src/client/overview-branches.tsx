@@ -14,10 +14,24 @@ import { OVERLAY_ATTR, useDialogFocus } from './dialog-focus.js'
 import { useRowSlider } from './row-slider.js'
 import type { BranchOption } from './branch-options.js'
 import type { BranchTree } from './overview-hooks.js'
+import { branchNamesUnderDir } from './branch-selection.js'
 
 /** Row geometry of the branch/tag list; the compact sheet indents the same way. */
 export const BRANCH_BASE = 22
 export const BRANCH_INDENT = 24
+
+/**
+ * The modifier gesture a row reports. Kept structural so the row code owns no
+ * React event types; the panel reads `currentTarget` to find the row order of
+ * the Ctrl/⌘ and Shift selection.
+ */
+export interface BranchGesture {
+  readonly metaKey: boolean
+  readonly ctrlKey: boolean
+  readonly shiftKey: boolean
+  readonly currentTarget: Element
+  preventDefault(): void
+}
 
 export interface BranchCbs {
   onFilter: (ref: string | null) => void
@@ -29,7 +43,20 @@ export interface BranchCbs {
   onToggle: (section: string) => void
   onRetry: () => void
   /** Right-click props for one branch row (absent on hosts without menus). */
-  menu?: (value: { name: string; isCurrent: boolean; isRemote: boolean; isTag: boolean; ref?: string }) => Record<string, unknown>
+  menu?: (value: {
+    name: string; isCurrent: boolean; isRemote: boolean; isTag: boolean; ref?: string
+    dir?: string; dirBranches?: readonly string[]
+  }) => Record<string, unknown>
+  /** Local branch names the reader picked (Ctrl/⌘ click, Shift range). */
+  readonly selectedBranches?: ReadonlySet<string>
+  /** A modifier click on a branch row: toggle, or extend the range. */
+  readonly onRowSelect?: (event: BranchGesture, name: string) => void
+  /** A modifier click on a directory row: pick every branch below it. */
+  readonly onDirSelect?: (event: BranchGesture, path: string) => void
+  /** Selection bar: picked count and its two actions. */
+  readonly selectionCount?: number
+  readonly onClearSelection?: () => void
+  readonly onDeleteSelection?: () => void
   t: (key: GitKey, params?: Record<string, string | number>) => string
 }
 
@@ -61,8 +88,14 @@ export interface BranchScrollProps {
  * measured from. */
 export function BranchScroll({ tree, treeError, activeRef, closed, cbs, trees }: BranchScrollProps): JSX.Element {
   const slider = useRowSlider({ activeSelector: '.gp-branch-row--active', deps: [activeRef, tree, trees, closed] })
-  return h('div', { className: 'gp-col-left__scroll', ref: slider.ref }, [
+  const picked = cbs.selectionCount ?? 0
+  return h('div', { className: 'gp-col-left__scroll', ref: slider.ref, 'data-branch-scroll': '' }, [
     slider.slider,
+    picked > 0 ? h('div', { key: 'picked', className: 'gp-branch-select' }, [
+      h('span', { key: 'c', className: 'gp-branch-select__count', title: cbs.t('branchSelect.hint') }, cbs.t('branchSelect.count', { count: picked })),
+      h('button', { key: 'd', type: 'button', className: 'gp-branch-select__btn gp-branch-select__btn--danger', onClick: () => cbs.onDeleteSelection?.() }, cbs.t('branchSelect.delete')),
+      h('button', { key: 'x', type: 'button', className: 'gp-branch-select__btn', onClick: () => cbs.onClearSelection?.() }, cbs.t('branchSelect.clear')),
+    ]) : null,
     renderBranchList(tree, treeError, activeRef, closed, cbs, trees),
   ])
 }
@@ -80,7 +113,8 @@ function renderBranchList(tree: BranchTree | null, treeError: boolean, activeRef
     const ref = b.name
     const isCurrent = sectionKey === 'local' && tree.current === b.name
     const isPrimary = (sectionKey === 'local' && trees.localPrimary === b.name) || (sectionKey === 'remote' && trees.remotePrimary === b.name)
-    const cls = `gp-branch-row${activeRef === ref ? ' gp-branch-row--active' : ''}${isCurrent ? ' gp-branch-row--current' : ''}${isPrimary ? ' gp-branch-row--primary' : ''}`
+    const picked = sectionKey === 'local' && (cb.selectedBranches?.has(b.name) ?? false)
+    const cls = `gp-branch-row${activeRef === ref ? ' gp-branch-row--active' : ''}${isCurrent ? ' gp-branch-row--current' : ''}${isPrimary ? ' gp-branch-row--primary' : ''}${picked ? ' gp-branch-row--picked' : ''}`
     const target = cb.switchOptions.get(`${sectionKey}:${b.name}`)
     const roleLabel = [isCurrent ? cb.t('overview.currentBranch') : '', isPrimary ? cb.t('overview.primaryBranch') : ''].filter(Boolean).join(' · ')
     const rowIcon = isCurrent ? h(BranchCurrentIcon, { size: 14 }) : isPrimary ? h(BranchPrimaryIcon, { size: 14 }) : icon
@@ -99,13 +133,26 @@ function renderBranchList(tree: BranchTree | null, treeError: boolean, activeRef
         ...(b.behind === undefined ? {} : { behind: b.behind }),
       }),
       'data-current': isCurrent ? 'true' : undefined, 'data-primary': isPrimary ? 'true' : undefined,
+      // The panel reads these to compute a Shift range over exactly the rows
+      // the reader can see (folded sections included).
+      'data-branch-row': b.name,
+      'data-picked': picked ? 'true' : undefined,
       // Keyboard parity with the dir rows below: a leaf row is a toggle button
       // (filter on/off), and inside a focus trap (the compact sheet) it must be
       // reachable, not just clickable.
       role: 'button',
       tabIndex: 0,
       'aria-pressed': activeRef === ref,
-      onClick: () => cb.onFilter(activeRef === ref ? null : ref),
+      onClick: (event: BranchGesture) => {
+        // Ctrl/⌘ and Shift are the selection gestures; a plain click keeps the
+        // row's original meaning (filter the history to this ref).
+        if (event.metaKey || event.ctrlKey || event.shiftKey) {
+          event.preventDefault()
+          cb.onRowSelect?.(event, b.name)
+          return
+        }
+        cb.onFilter(activeRef === ref ? null : ref)
+      },
       onKeyDown: (e: KeyboardEvent) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cb.onFilter(activeRef === ref ? null : ref) }
       },
@@ -137,6 +184,12 @@ function renderBranchList(tree: BranchTree | null, treeError: boolean, activeRef
       // remote with many `origin/feat/*` refs does not unfold the whole tree.
       const defaultOpen = depth === 0
       const open = closed.has(dirKey) ? !defaultOpen : defaultOpen
+      // A local directory row acts on every branch below it, expanded or not;
+      // the current branch is never a delete target, so it is left out of the
+      // count the menu shows.
+      const dirBranches = sectionKey === 'local'
+        ? branchNamesUnderDir(trees.local, node.path).filter((name) => name !== tree.current)
+        : []
       rows.push(h('div', {
         key: dirKey,
         className: 'gp-branch-row gp-branch-row--dir',
@@ -145,7 +198,18 @@ function renderBranchList(tree: BranchTree | null, treeError: boolean, activeRef
         role: 'button',
         tabIndex: 0,
         'aria-expanded': open,
-        onClick: () => cb.onToggle(dirKey),
+        'data-branch-dir': node.path,
+        ...(sectionKey === 'local'
+          ? cb.menu?.({ name: node.path, isCurrent: false, isRemote: false, isTag: false, dir: node.path, dirBranches })
+          : {}),
+        onClick: (event: BranchGesture) => {
+          if (event.metaKey || event.ctrlKey) {
+            event.preventDefault()
+            cb.onDirSelect?.(event, node.path)
+            return
+          }
+          cb.onToggle(dirKey)
+        },
         onKeyDown: (e: KeyboardEvent) => {
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cb.onToggle(dirKey) }
         },
@@ -166,7 +230,7 @@ function renderBranchList(tree: BranchTree | null, treeError: boolean, activeRef
       for (const branch of pinned) rows.push(branchRow(branch, branch.name, 0, key, icon))
       walk(nodes, 0, key, icon, rows)
     }
-    return h('div', { key, className: 'gp-branch-group' }, [
+    return h('div', { key, className: 'gp-branch-group', 'data-branch-section': key }, [
       h('div', {
         key: 'head', className: 'gp-branch-group__head', role: 'button', tabIndex: 0, 'aria-expanded': !closed.has(key),
         onClick: () => cb.onToggle(key),

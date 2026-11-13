@@ -22,6 +22,8 @@ function commands(log) {
     filterRef: (ref) => log.push(['filter', ref]),
     openTagCreate: (value) => log.push(['tag', value.hash]),
     openBranchDelete: (value) => log.push(['delete', value.name]),
+    openBranchDeleteMany: (names) => log.push(['deleteMany', [...names]]),
+    selectDirBranches: (path, names) => log.push(['selectDir', path, [...names]]),
     openRemoteBranchDelete: (value) => log.push(['deleteRemote', value.ref]),
     openBranchCreate: (target) => log.push(['create', target.start, target.label]),
     openBranchMerge: (target) => log.push(['merge', target.start, target.label]),
@@ -326,4 +328,68 @@ test('another branch offers its own push only when strictly ahead and the host c
   assert.equal(branchMenuActions(ahead, env(), commands([]), { busy: false }).some((a) => a.id === 'push-branch'), false)
   // A remote row pushes through its tracking ref, not through this entry.
   assert.equal(branchMenuActions({ ...ahead, isRemote: true }, env(), commands([]), { busy: false, branchPush: true }).some((a) => a.id === 'push-branch'), false)
+})
+
+test('a directory row picks or deletes every branch below it', () => {
+  const log = []
+  const dir = { ...identity, name: 'feature/pay', isCurrent: false, isRemote: false, dir: 'feature/pay', dirBranches: ['feature/pay/a', 'feature/pay/b'] }
+  const actions = branchMenuActions(dir, env(), commands(log), { busy: false, branchDelete: true })
+  assert.deepEqual(actions.map((a) => a.id), ['select-dir-branches', 'delete-dir-branches'])
+  assert.equal(actions[0].label, 'menu.selectDirBranches')
+  assert.equal(actions[1].label, 'menu.deleteDirBranches')
+  assert.equal(actions[1].danger, true)
+  assert.equal(actions[1].separatorBefore, true)
+  void actions[0].run()
+  void actions[1].run()
+  assert.deepEqual(log, [
+    ['selectDir', 'feature/pay', ['feature/pay/a', 'feature/pay/b']],
+    ['deleteMany', ['feature/pay/a', 'feature/pay/b']],
+  ])
+})
+
+test('a directory row without the delete capability only offers the pick', () => {
+  const dir = { ...identity, name: 'feature', isCurrent: false, isRemote: false, dir: 'feature', dirBranches: ['feature/a'] }
+  const actions = branchMenuActions(dir, env(), commands([]), { busy: false })
+  assert.deepEqual(actions.map((a) => a.id), ['select-dir-branches'])
+})
+
+test('a directory row with no local branches offers nothing', () => {
+  const dir = { ...identity, name: 'feature', isCurrent: false, isRemote: false, dir: 'feature', dirBranches: [] }
+  assert.deepEqual(branchMenuActions(dir, env(), commands([]), { busy: false, branchDelete: true }), [])
+})
+
+test('a row inside a multi-selection deletes the whole picked set', () => {
+  const log = []
+  const selected = { ...branch, name: 'feat-a', selection: ['feat-a', 'feat-b', 'feat-c'] }
+  const actions = branchMenuActions(selected, env(), commands(log), { busy: false, branchDelete: true, currentBranch: 'main' })
+  const ids = actions.map((a) => a.id)
+  assert.ok(ids.includes('delete-selected-branches'), 'bulk entry replaces the single delete')
+  assert.equal(ids.includes('delete-branch'), false)
+  const bulk = actions.find((a) => a.id === 'delete-selected-branches')
+  assert.equal(bulk.danger, true)
+  void bulk.run()
+  assert.deepEqual(log, [['deleteMany', ['feat-a', 'feat-b', 'feat-c']]])
+})
+
+test('a right-clicked row outside the selection keeps its single delete', () => {
+  const log = []
+  const other = { ...branch, name: 'feat-z', selection: ['feat-a', 'feat-b'] }
+  const actions = branchMenuActions(other, env(), commands(log), { busy: false, branchDelete: true, currentBranch: 'main' })
+  const ids = actions.map((a) => a.id)
+  assert.ok(ids.includes('delete-branch'))
+  assert.equal(ids.includes('delete-selected-branches'), false)
+})
+
+test('the current branch never rides along in a bulk delete', () => {
+  const log = []
+  // Selection still holds the checked-out branch (it can be picked visually);
+  // the entry drops it instead of offering a delete git would refuse.
+  const row = { ...branch, name: 'feat-a', selection: ['feat-a', 'current'] }
+  const actions = branchMenuActions(row, env(), commands(log), { busy: false, branchDelete: true, currentBranch: 'current' })
+  const bulk = actions.find((a) => a.id === 'delete-selected-branches')
+  assert.equal(bulk, undefined, 'only one target remains, so the single delete is used')
+  const single = actions.find((a) => a.id === 'delete-branch')
+  assert.ok(single !== undefined)
+  void single.run()
+  assert.deepEqual(log, [['delete', 'feat-a']])
 })

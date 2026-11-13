@@ -40,6 +40,19 @@ export const CSS = `
 .gp-branch-row__head{flex:none;margin-left:auto;padding:0 6px;border-radius:999px;font-size:10px;font-weight:600;line-height:16px;letter-spacing:.02em;color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
 .gp-branch-row__track+.gp-branch-row__head{margin-left:6px}
 .gp-branch-row__track{display:inline-flex;align-items:center;gap:7px;flex:none;margin-left:auto;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--dsw-alias-state-business-primary)}
+/* Ctrl/⌘ selection: a tinted background, so the filter's own cue (text colour,
+   .gp-branch-row--active) and the pick never compete for the same channel. */
+.gp-branch-row--picked{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent)}
+.gp-branch-row--picked:hover{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent)}
+.gp-branch-select{display:flex;align-items:center;gap:4px;flex:none;padding:4px 10px;border-bottom:.5px solid var(--dsw-alias-border-l2);font-size:11px;color:var(--dsw-alias-label-secondary)}
+.gp-branch-select__count{min-width:0;margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gp-branch-select__btn{flex:none;border:0;background:none;padding:2px 6px;border-radius:5px;font:inherit;color:var(--dsw-alias-label-primary);cursor:pointer}
+.gp-branch-select__btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.gp-branch-select__btn--danger{color:var(--dsw-alias-state-error-primary)}
+/* The bulk delete's name list: bounded, so a long selection cannot push the
+   dialog's buttons off screen. */
+.gp-bpick__list{margin:0;padding:0;list-style:none;max-height:180px;overflow:auto;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
+.gp-bpick__listitem{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gp-branch-row__sync{display:inline-flex;align-items:center;gap:2px;white-space:nowrap}
 .gp-branch-row__sync-icon{flex:none}
 .gp-branch-row__switch{display:none;flex:none;margin:-2px 0 -2px auto;padding:0 7px;height:18px;border:1px solid var(--dsw-alias-border-l2);border-radius:5px;background:var(--dsw-alias-bg-layer-1);font:inherit;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);cursor:pointer}

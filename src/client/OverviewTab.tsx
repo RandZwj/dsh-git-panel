@@ -30,12 +30,13 @@ import { useCopyFeedback } from './copy-feedback.js'
 import { NoticeBar, useDismissedNotices } from './notice.js'
 import { useResizableColumn, useStackedSplit } from './resizable.js'
 import { opErrorText, renderConfirmModal } from './ops-modals.js'
-import { runRemoteAction, runSnapshotAction, runSnapshotSequence } from './op-runner.js'
+import { runRemoteAction, runRemoteBatch, runSnapshotAction, runSnapshotSequence } from './op-runner.js'
 import { renderResetModal, renderTagCreateModal } from './overview-modals.js'
 import { renderBranchSwitchConfirm } from './branch-switch.js'
-import { renderBranchDeleteConfirm, renderRemoteBranchDeleteConfirm } from './branch-delete.js'
+import { renderBranchDeleteConfirm, renderBulkBranchDeleteConfirm, renderRemoteBranchDeleteConfirm } from './branch-delete.js'
 import { renderBranchCreateModal } from './branch-create.js'
 import { buildBranchOptions, isSelectable, type BranchOption } from './branch-options.js'
+import { branchNamesUnderDir, branchSelectionRange, pruneBranchSelection, toggleBranchSelection } from './branch-selection.js'
 import { renderStatusBar } from './overview-statusbar.js'
 import { RepoBar } from './overview-repobar.js'
 import { PublishModal } from './PublishModal.js'
@@ -43,6 +44,10 @@ import { SetUpstreamModal } from './SetUpstreamModal.js'
 import { ReposSection, type RepositoriesHost } from './ReposSection.js'
 import { useRowSlider } from './row-slider.js'
 import { buildTops, windowRange, VIEWPORT_FALLBACK, VOVERSCAN } from './virtual-list.js'
+
+/** One bulk delete covers at most this many branches; a larger pick is refused
+ * with a readable message instead of firing hundreds of RPCs in a row. */
+const BULK_DELETE_MAX = 200
 import { useViewportTracker } from './use-viewport.js'
 import { canPush, canSetUpstream, canSync } from './push-policy.js'
 import { useSyncFlow } from './sync-flow.js'
@@ -259,6 +264,19 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
   // short name for display. One stage, acknowledgement mandatory (no server-side
   // merged check exists).
   const [remoteBranchToDelete, setRemoteBranchToDelete] = useState<{ ref: string; label: string } | null>(null)
+  // Bulk local-branch delete: a multi-selection or one directory's branches.
+  // `unmerged` collects the safe-delete refusals so the second stage can ask
+  // for one forced confirmation over exactly that subset.
+  const [bulkDelete, setBulkDelete] = useState<{
+    readonly names: readonly string[]
+    readonly unmerged: readonly string[]
+    readonly deleted: number
+    readonly force: boolean
+  } | null>(null)
+  // Branch selection (Ctrl/⌘ click, Shift range). Names, not identities: the
+  // list is rebuilt on every snapshot and pruneBranchSelection drops the gone.
+  const [branchSel, setBranchSel] = useState<readonly string[]>([])
+  const [branchSelAnchor, setBranchSelAnchor] = useState<string | null>(null)
   // Branch create form (issue #118): anchored to the captured start point like
   // the tag form, so an unrelated HEAD/branch move does not close it — the
   // ref or hash it names still resolves wherever HEAD went.
@@ -387,9 +405,76 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
       tags: buildBranchTree(tree?.tags ?? []),
     }
   }, [tree, remoteName])
-  // A clean work tree switches straight away (git carries nothing across and
-  // has nothing to lose); a dirty one still opens the confirm so the user can
-  // pick between carrying the changes and stashing first.
+  // Selection state the menu and the rows read at gesture time (a ref keeps the
+  // memoized bindings stable).
+  const branchSelRef = useRef(branchSel)
+  branchSelRef.current = branchSel
+  const localBranchNames = useMemo(() => new Set((tree?.local ?? []).map((branch) => branch.name)), [tree])
+  // A branch that vanished (deleted elsewhere, renamed, or the snapshot pruned
+  // it) leaves the selection; a stale name must never reach a delete request.
+  useEffect(() => {
+    setBranchSel((prev) => pruneBranchSelection(prev, localBranchNames))
+    setBranchSelAnchor((prev) => (prev !== null && localBranchNames.has(prev) ? prev : null))
+  }, [localBranchNames])
+  // The selection belongs to the checkout it was built in: another repository
+  // keeps the panes but none of the names, so it starts empty.
+  const branchRoot = snapshot.root
+  useEffect(() => { setBranchSel([]); setBranchSelAnchor(null); setBulkDelete(null) }, [branchRoot])
+  const branchCurrentRef = useRef<string | null>(tree?.current ?? null)
+  branchCurrentRef.current = tree?.current ?? null
+  /** Visible local rows, in render order, scoped to this panel's own list. */
+  const visibleLocalOrder = (origin: Element | null): readonly string[] => {
+    const scope = origin?.closest('[data-branch-scroll]') ?? null
+    if (scope === null) return []
+    return [...scope.querySelectorAll('[data-branch-section="local"] [data-branch-row]')]
+      .map((row) => row.getAttribute('data-branch-row') ?? '')
+      .filter((name) => name !== '')
+  }
+  const onRowSelect = (event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; currentTarget: Element; preventDefault(): void }, name: string): void => {
+    if (event.shiftKey) {
+      const order = visibleLocalOrder(event.currentTarget)
+      const anchor = branchSelAnchor !== null && order.includes(branchSelAnchor) ? branchSelAnchor : null
+      setBranchSel(branchSelectionRange(order, anchor, name))
+      if (branchSelAnchor === null) setBranchSelAnchor(name)
+      return
+    }
+    setBranchSel((prev) => toggleBranchSelection(prev, name))
+    setBranchSelAnchor(name)
+  }
+  const onDirSelect = (_event: unknown, path: string): void => {
+    const names = branchNamesUnderDir(branchTrees.local, path).filter((name) => name !== branchCurrentRef.current)
+    if (names.length === 0) return
+    setBranchSel((prev) => {
+      const all = names.every((name) => prev.includes(name))
+      if (all) return prev.filter((name) => !names.includes(name))
+      return [...new Set([...prev, ...names])]
+    })
+    setBranchSelAnchor(null)
+  }
+  const selectDirBranches = (_path: string, names: readonly string[]): void => {
+    setBranchSel((prev) => [...new Set([...prev, ...names.filter((name) => name !== branchCurrentRef.current)])])
+    setBranchSelAnchor(null)
+  }
+  const clearBranchSelection = (): void => { setBranchSel([]); setBranchSelAnchor(null) }
+  // The four layouts (wide column, stacked drawer, compact drawer, sheet) share
+  // one selection face; only the row click's filter behavior differs.
+  const branchSelectionCbs = {
+    selectedBranches: new Set(branchSel),
+    onRowSelect,
+    onDirSelect,
+    selectionCount: branchSel.length,
+    onClearSelection: clearBranchSelection,
+    onDeleteSelection: () => openBranchDeleteMany(branchSel),
+  }
+  const openBranchDeleteMany = (names: readonly string[]): void => {
+    const targets = names.filter((name) => name !== branchCurrentRef.current)
+    if (targets.length === 0) return
+    setOpError(null)
+    setBulkDelete({ names: targets, unmerged: [], deleted: 0, force: false })
+  }
+  /** A clean work tree switches straight away (git carries nothing across and
+   * has nothing to lose); a dirty one still opens the confirm so the user can
+   * pick between carrying the changes and stashing first. */
   const openSwitch = (option: BranchOption): void => {
     setOpError(null)
     if (!snapshot.dirty) { void runBranchSwitch(option, false); return }
@@ -405,7 +490,8 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
   const branchMenu = useMemo(
     () => (panelMenu === undefined
       ? undefined
-      : (value: { name: string; isCurrent: boolean; isRemote: boolean; isTag: boolean; ref?: string; ahead?: number; behind?: number }) => panelMenu.bind(MENU_KIND.branch, value)),
+      : (value: { name: string; isCurrent: boolean; isRemote: boolean; isTag: boolean; ref?: string; ahead?: number; behind?: number; dir?: string; dirBranches?: readonly string[] }) =>
+        panelMenu.bind(MENU_KIND.branch, { ...value, selection: branchSelRef.current })),
     [panelMenu],
   )
   const commitMenu = useMemo(
@@ -464,7 +550,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
   // shared with the changes toolbar (`sync-flow.tsx`); this tab only supplies
   // its own run and its own busy/error slots.
   const sync = useSyncFlow({ snapshot, busy: syncRunBusy, error: syncError, t, onRun: runSyncNow })
-  const opDialogOpen = resetTarget !== null || revertTarget !== null || switchTarget !== null || checkoutTarget !== null || branchToDelete !== null || remoteBranchToDelete !== null || branchMergeTarget !== null || pickTarget !== null || sync.open
+  const opDialogOpen = resetTarget !== null || revertTarget !== null || switchTarget !== null || checkoutTarget !== null || branchToDelete !== null || bulkDelete !== null || remoteBranchToDelete !== null || branchMergeTarget !== null || pickTarget !== null || sync.open
   const opInFlight = opBusy || switchBusy
   // The runs the menu offers, closing over this render's state (the owner reads
   // the published object at resolve time, so a fresh one each render is enough).
@@ -476,6 +562,8 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
     filterRef: (ref) => setRef(ref),
     openTagCreate: (value) => { setOpError(null); setTagForm({ hash: value.hash, shortHash: value.shortHash }) },
     openBranchDelete: (value) => { setOpError(null); setDeleteNeedsForce(false); setBranchToDelete(value.name) },
+    openBranchDeleteMany: (names) => openBranchDeleteMany(names),
+    selectDirBranches: (path, names) => selectDirBranches(path, names),
     openRemoteBranchDelete: (value) => {
       if (value.ref === undefined) return
       setOpError(null); setRemoteBranchToDelete({ ref: value.ref, label: value.name })
@@ -539,6 +627,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
     setRevertTarget(null)
     setSwitchTarget(null)
     setBranchToDelete(null)
+    setBulkDelete(null)
     setDeleteNeedsForce(false)
     setRemoteBranchToDelete(null)
     setBranchMergeTarget(null)
@@ -708,6 +797,47 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
       },
       t('error.generic'),
     )
+
+  // Bulk delete (multi-selection or a directory row): one confirm, then git's
+  // safe `-d` for every branch. Only the branches it refused as unmerged come
+  // back as a second, forced stage; the rest are already gone, so the summary
+  // counts both passes. The dialog closes on completion and a partial failure
+  // reports through the status bar's warn slot rather than a second modal.
+  const runBulkBranchDelete = async (force: boolean): Promise<void> => {
+    if (bulkDelete === null) return
+    const names = force ? bulkDelete.unmerged : bulkDelete.names
+    if (names.length === 0) return
+    if (!force && names.length > BULK_DELETE_MAX) {
+      setOpError(t('branchDeleteMany.tooMany', { max: BULK_DELETE_MAX }))
+      return
+    }
+    const results = await runRemoteBatch(
+      { busy: opBusy, setBusy: setOpBusy, setError: setOpError },
+      remote, sessionId,
+      names.map((name) => ({ kind: 'branch-delete' as const, name, ...(force ? { force: true as const } : {}) })),
+      t('error.generic'),
+    )
+    const attempted = names.slice(0, results.length)
+    const unmerged = attempted.filter((_, index) => results[index]?.ok === false && results[index]?.code === 'branch-unmerged')
+    const failures = results.filter((result) => result.ok === false && result.code !== 'branch-unmerged')
+    const deleted = results.filter((result) => result.ok).length
+    if (!force && unmerged.length > 0) {
+      setBulkDelete({ names: bulkDelete.names, unmerged, deleted, force: true })
+      setOpError(null)
+      return
+    }
+    const totalDeleted = bulkDelete.deleted + deleted
+    afterRefOp()
+    setBulkDelete(null)
+    clearBranchSelection()
+    if (failures.length > 0) {
+      const first = failures[0]!
+      const reason = first.code === undefined ? first.message ?? t('error.generic') : opErrorText(first.code, first.message, t)
+      statusReporter()(`${t('branchDeleteMany.summary', { deleted: totalDeleted, failed: failures.length })}${reason === null || reason === undefined ? '' : ` ${reason}`}`)
+    } else {
+      setOpError(null)
+    }
+  }
 
   // Remote delete (issue #112 follow-up). A network write with no safe mode:
   // the dialog's acknowledgement is the only gate, and the row's full tracking
@@ -949,6 +1079,17 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
       confirmBusy: opBusy,
       onConfirm: () => void runTagDelete(tagToDelete),
       onClose: () => setTagToDelete(null),
+      t,
+    }) : null,
+    bulkDelete !== null ? renderBulkBranchDeleteConfirm({ names: bulkDelete.names }, {
+      names: bulkDelete.names,
+      unmerged: bulkDelete.unmerged,
+      needsForce: bulkDelete.force,
+      overLimit: bulkDelete.names.length > BULK_DELETE_MAX,
+      busy: opBusy,
+      error: opError,
+      onConfirm: (force) => void runBulkBranchDelete(force),
+      onClose: () => { setBulkDelete(null); setOpError(null) },
       t,
     }) : null,
     branchToDelete !== null ? renderBranchDeleteConfirm({ name: branchToDelete }, {
@@ -1372,6 +1513,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
       onToggle: toggleSection,
       onRetry: reloadTree,
       menu: branchMenu,
+      ...branchSelectionCbs,
             t,
     }, trees: branchTrees })
     const status = renderStatusBar(snapshot, statusCbs)
@@ -1436,6 +1578,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
             onToggle: toggleSection,
             onRetry: reloadTree,
             menu: branchMenu,
+            ...branchSelectionCbs,
                   t,
           }, trees: branchTrees }),
         ],
@@ -1465,6 +1608,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
         onRetry: reloadTree,
         onClose: () => setSheetOpen(false),
         menu: branchMenu,
+        ...branchSelectionCbs,
               t,
       }, branchTrees, reposBlock) : null,
     ])
@@ -1485,6 +1629,7 @@ export function OverviewTab({ remote, sessionId, visible = true, defaultDiffView
         onToggle: toggleSection,
         onRetry: reloadTree,
         menu: branchMenu,
+        ...branchSelectionCbs,
               t,
       }, trees: branchTrees }),
       renderStatusBar(snapshot, statusCbs),

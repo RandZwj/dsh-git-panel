@@ -63,6 +63,80 @@ function BranchDeleteConfirm({ name, needsForce, busy, error, onConfirm, onClose
   })
 }
 
+export interface BulkBranchDeleteCbs {
+  /** Every local branch the confirm covers, in pick order. */
+  readonly names: readonly string[]
+  /** Branches whose safe `-d` was refused as not fully merged. */
+  readonly unmerged: readonly string[]
+  /** The dialog is in its forced stage: the acknowledgement gates confirm. */
+  readonly needsForce: boolean
+  /** The selection is larger than one batch; confirm stays locked. */
+  readonly overLimit?: boolean
+  readonly busy: boolean
+  readonly error: string | null
+  readonly onConfirm: (force: boolean) => void
+  readonly onClose: () => void
+  readonly t: OpT
+}
+
+/** How many names the dialog lists before folding the rest into a count. */
+const BULK_LIST_MAX = 20
+
+export function renderBulkBranchDeleteConfirm(target: { names: readonly string[] }, cb: BulkBranchDeleteCbs): JSX.Element | null {
+  if (typeof document === 'undefined') return null
+  const { names: _names, ...rest } = cb
+  return h(BulkBranchDeleteConfirm, { names: target.names, ...rest })
+}
+
+const nameList = (names: readonly string[]): JSX.Element => h('ul', { className: 'gp-bpick__list' },
+  names.slice(0, BULK_LIST_MAX).map((name) => h('li', { key: name, className: 'gp-bpick__listitem', title: name }, name)))
+
+function BulkBranchDeleteConfirm({ names, unmerged, needsForce, overLimit, busy, error, onConfirm, onClose, t }: BulkBranchDeleteCbs): JSX.Element | null {
+  const [ack, setAck] = useState(false)
+  // A new stage (the force step appearing, or another batch) invalidates an
+  // acknowledgement given for the previous one.
+  useEffect(() => { setAck(false) }, [needsForce, names])
+  const confirmDisabled = busy || overLimit === true || (needsForce && !ack)
+  const listed = needsForce ? unmerged : names
+  return renderConfirmModal({
+    title: needsForce
+      ? t('branchDeleteMany.forceTitle', { count: unmerged.length })
+      : t('branchDeleteMany.title', { count: names.length }),
+    body: needsForce
+      ? t('branchDeleteMany.forceBody', { count: unmerged.length })
+      : t('branchDeleteMany.body', { count: names.length }),
+    extra: h('div', { key: 'x', className: 'gp-bpick__extra' }, [
+      nameList(listed),
+      listed.length > BULK_LIST_MAX
+        ? h('div', { key: 'more', className: 'gp-bpick__note' }, t('branchDeleteMany.listMore', { count: listed.length }))
+        : null,
+      needsForce
+        ? h('div', { key: 'warn', className: 'gp-bpick__warn' }, t('branchDeleteMany.forceWarn'))
+        : h('div', { key: 'note', className: 'gp-bpick__note' }, t('branchDelete.safeNote')),
+      overLimit === true
+        ? h('div', { key: 'limit', className: 'gp-bpick__warn' }, t('branchDeleteMany.tooMany', { max: 200 }))
+        : null,
+      needsForce
+        ? h('label', { key: 'ack', className: 'gp-modal__check' }, [
+            h('input', { key: 'cb', type: 'checkbox', className: 'gp-check', checked: ack, onChange: () => setAck((v) => !v) }),
+            t('branchDeleteMany.forceAck'),
+          ])
+        : null,
+    ]),
+    confirmLabel: needsForce
+      ? t('branchDeleteMany.force', { count: unmerged.length })
+      : t('branchDeleteMany.confirm', { count: names.length }),
+    danger: true,
+    error,
+    confirmBusy: busy,
+    confirmDisabled,
+    busyLabel: t('branchDeleteMany.busy'),
+    onConfirm: () => onConfirm(needsForce),
+    onClose,
+    t,
+  })
+}
+
 export interface RemoteBranchDeleteCbs {
   /** The row's short name (`origin/feat/x`), what the user right-clicked. */
   readonly label: string

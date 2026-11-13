@@ -76,6 +76,15 @@ export interface BranchTargetValue extends MenuIdentity {
    * when neither a push nor an update applies. */
   readonly ahead?: number
   readonly behind?: number
+  /** Local branches the reader has picked. Present on every branch gesture
+   * (the panel reads it at gesture time); a row inside a multi-selection gets
+   * the bulk delete instead of the single one. */
+  readonly selection?: readonly string[]
+  /** Set when the row is a folded directory rather than a branch: its path.
+   * Directory rows carry no branch identity of their own. */
+  readonly dir?: string
+  /** Local branches below that directory row, in row order (`dir` only). */
+  readonly dirBranches?: readonly string[]
 }
 
 /** One commit row (history list or the detail header). */

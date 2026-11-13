@@ -24,6 +24,7 @@ export { activateGitTab, isGitTabActive, returnToConversation, stashSubTab, rece
 export { splitRemoteRef, buildBranchOptions, isSelectable } from './branch-options.js'
 export { modelForProvider, effortForModel } from './model-route.js'
 export { changeKey, sideOf, pathOfKey, pickDiscardTargets, pickStageTargets, pickUnstageTargets, groupPickState, toggleGroupKeys } from './selection-keys.js'
+export { branchNamesUnderDir, branchSelectionRange, pruneBranchSelection, toggleBranchSelection } from './branch-selection.js'
 export { formatBytes } from './bytes.js'
 export { langLabel } from './lang-label.js'
 export { isUntrackedPath } from './status.js'

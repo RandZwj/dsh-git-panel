@@ -58,6 +58,55 @@ export async function runRemoteAction(
   }
 }
 
+/** One action's outcome inside {@link runRemoteBatch}. */
+export interface RemoteBatchResult {
+  readonly ok: boolean
+  /** Wire failure code, when the host refused this action. */
+  readonly code?: string
+  readonly message?: string
+}
+
+/**
+ * Run one wire action per item, in order, inside ONE busy window.
+ *
+ * Built for the branch list's bulk delete: every branch is its own
+ * `branch-delete`, so a refusal (already merged check, another worktree) must
+ * not abort the rest. Results stay index-aligned with the actions actually
+ * attempted; a transport failure ends the batch, because every later call
+ * would fail the same way and the dialog needs the remaining names left alone.
+ * @param env - busy/error envelope shared with the dialog.
+ * @param remote - the panel's RPC face.
+ * @param sessionId - the session whose repository is written.
+ * @param actions - one action per item; nothing is batched on the wire.
+ * @param fallback - last-resort message for a thrown call.
+ * @returns one outcome per attempted action.
+ */
+export async function runRemoteBatch(
+  env: OpEnv,
+  remote: GitPanelRemote,
+  sessionId: string,
+  actions: readonly GitAction[],
+  fallback: string,
+): Promise<readonly RemoteBatchResult[]> {
+  if (!claim(env)) return []
+  env.setError(null)
+  const results: RemoteBatchResult[] = []
+  try {
+    for (const action of actions) {
+      try {
+        const res = await remote.run({ sessionId, action })
+        results.push(res.ok ? { ok: true } : { ok: false, code: res.error.code, message: res.error.message })
+      } catch (error) {
+        results.push({ ok: false, message: error instanceof Error ? error.message : fallback })
+        break
+      }
+    }
+  } finally {
+    release(env)
+  }
+  return results
+}
+
 /**
  * Run several work-tree actions in order, stopping at the first failure.
  *
