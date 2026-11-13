@@ -48,6 +48,7 @@
 | [ADR-0030](0030-external-roots-from-code-workspace.md) | 由 `.code-workspace` 文件认证工作区外的仓库根 | 安全 |
 | [ADR-0031](0031-diverged-sync-merge-then-push.md) | 分叉分支的同步：显式合并上游后普通推送 | 安全 |
 | [ADR-0032](0032-branch-row-push.md) | 分支行的推送按分支解析，不检出也能推 | 安全 |
+| [ADR-0033](0033-remote-branches-scoped-to-configured-remotes.md) | 远端分支只列配置过的远端，丢弃 `refs/remotes` 下的孤儿 ref | 契约 |
 
 ## 有效期
 

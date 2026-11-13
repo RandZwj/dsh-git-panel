@@ -3475,6 +3475,9 @@ test('branches drops the remote symbolic HEAD and keeps a real branch ending in 
   const dir = await scratchRepo({ 'a.txt': 'v1\n' })
   try {
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+    // The branch list keeps only refs a configured remote owns (ADR-0033), so
+    // the fixture needs a real `origin` for these tracking refs to be branches.
+    await runGit(dir, ['remote', 'add', 'origin', 'https://example.invalid/repo.git'])
     await runGit(dir, ['update-ref', 'refs/remotes/origin/main', head])
     await runGit(dir, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'])
     await runGit(dir, ['update-ref', 'refs/remotes/origin/feature/HEAD', head])

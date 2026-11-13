@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { SnapshotDeps, GitPanelConfig } from './core.js'
-import { listSessionRepos, mapWorkspaceFailure, resolveBrowseRoot, resolveWorkspace, runCommand, snapshotForSession } from './core.js'
+import { configuredRemoteOf, listSessionRepos, mapWorkspaceFailure, resolveBrowseRoot, resolveWorkspace, runCommand, snapshotForSession } from './core.js'
 import { exactPathspec, historyPathspec, isGitInternalPath, isSafePath, isSafeRev, validateHistoryPathSearch } from './validate.js'
 import { walkHistoryTopology } from './history-topology.js'
 import { commitFromFields, parseBranches, parseGraphLog, parseNameStatus, parseStashList, parseTags, sumNumstat } from './parser.js'
@@ -1088,16 +1088,30 @@ async function queryBranches(deps: SnapshotDeps, root: string): Promise<GitQuery
   // drops — filtering by a `/HEAD` name suffix would also hide a real branch
   // that happens to end in `/HEAD`.
   const fmt = '--format=%(refname:short)%00%(objectname:short)%00%(upstream:track)%00%(refname)%00%(symref)'
-  const [localRes, remoteRes, currentRes, defaultRes] = await Promise.all([
+  // The configured remote names ride along: `refs/remotes` also holds refs no
+  // remote owns — GitLab merge-request refs written into `refs/remotes/mrs/*`
+  // by tooling, or leftovers from a removed remote. They are not branches, and
+  // `git fetch --prune` can never drop them, so the list keeps only refs whose
+  // first segment is a configured remote (see `configuredRemoteOf`).
+  const [localRes, remoteRes, currentRes, defaultRes, remotesRes] = await Promise.all([
     runCommand(deps.run, ['git', 'for-each-ref', '--sort=-committerdate', fmt, 'refs/heads'], root, 'branches-local', deps.signal),
     runCommand(deps.run, ['git', 'for-each-ref', '--sort=-committerdate', fmt, 'refs/remotes'], root, 'branches-remote', deps.signal),
     runCommand(deps.run, ['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], root, 'branch-current', deps.signal),
     runCommand(deps.run, ['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], root, 'branch-default', deps.signal),
+    runCommand(deps.run, ['git', 'remote'], root, 'branches-remotes', deps.signal),
   ])
   const local: GitBranch[] = 'run' in localRes && localRes.run.exitCode === 0 ? parseBranches(localRes.run.stdout) : []
-  const remote: GitBranch[] = 'run' in remoteRes && remoteRes.run.exitCode === 0
+  const parsedRemote: GitBranch[] = 'run' in remoteRes && remoteRes.run.exitCode === 0
     ? parseBranches(remoteRes.run.stdout)
     : []
+  // A failed `git remote` read leaves the list unfiltered rather than empty:
+  // hiding every remote branch would be a worse lie than showing a stray ref.
+  const configured = 'run' in remotesRes && remotesRes.run.exitCode === 0
+    ? remotesRes.run.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+    : undefined
+  const remote: GitBranch[] = configured === undefined
+    ? parsedRemote
+    : parsedRemote.filter((branch) => configuredRemoteOf(branch.name, configured) !== null)
   const current = 'run' in currentRes && currentRes.run.exitCode === 0 ? currentRes.run.stdout.trim() || null : null
   let defaultBranch: string | null = null
   if ('run' in defaultRes && defaultRes.run.exitCode === 0) {

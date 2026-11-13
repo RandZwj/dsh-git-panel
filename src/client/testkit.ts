@@ -5,7 +5,7 @@
  */
 export { parseStatus, parseGraphLog, parseBranches, parseNameStatus, parseTags, parseStashList, sumNumstat, parseRefs } from '../host/parser.js'
 export { parseRemote, classifyHost } from '../host/remote.js'
-export { parsePrimaryRemote, parseFetchRemotes, parseUpstreamRef } from '../host/core.js'
+export { parsePrimaryRemote, parseFetchRemotes, parseUpstreamRef, configuredRemoteOf } from '../host/core.js'
 export { isSafePath, isSafeRev, isSafeBranchName, isSafeRemoteName } from '../host/validate.js'
 export { openerArgv, canOpenWithSystem } from '../host/open-file.js'
 export { planAction, classifyActionFailure, splitRemoteTrackingRef, planRemoteBranchDelete } from '../host/actions.js'

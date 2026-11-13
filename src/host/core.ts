@@ -360,6 +360,30 @@ export function parseUpstreamRef(
 }
 
 /**
+ * The configured remote a `refs/remotes` short name belongs to, longest name
+ * wins (a remote name may itself contain slashes).
+ *
+ * `null` means no configured remote owns the ref. Those refs are not remote
+ * branches: GitLab merge-request refs that a tooling fetch wrote into
+ * `refs/remotes/mrs/<id>/head`, or refs left behind after their remote was
+ * removed. No configured refspec covers them, so `git fetch --prune` can never
+ * refresh or drop them — the branch list would show thousands of pseudo rows
+ * forever. The list therefore keeps only refs whose owner is a configured
+ * remote.
+ * @param name - short ref name, e.g. `origin/feature/x` or `work/fork/topic`.
+ * @param remotes - configured remote names (`git remote`).
+ * @returns the owning remote name, or null when no configured remote matches.
+ */
+export function configuredRemoteOf(name: string, remotes: readonly string[]): string | null {
+  let best: string | null = null
+  for (const remote of remotes) {
+    if (remote === '' || !name.startsWith(`${remote}/`)) continue
+    if (best === null || remote.length > best.length) best = remote
+  }
+  return best
+}
+
+/**
  * Pick the primary remote from `git remote -v` output and parse its fetch URL.
  * Prefers `origin`; otherwise the first remote listed. Lines look like
  * `origin\thttps://…\t(fetch)` — only `(fetch)` rows are considered.
